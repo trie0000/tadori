@@ -17,6 +17,7 @@ async function call(
   texts: string[],
   cfg: VoyageConfig,
   inputType: 'query' | 'document',
+  signal?: AbortSignal,
 ): Promise<Float32Array[]> {
   if (texts.length === 0) return [];
   if (!cfg.voyageApiKey) throw new Error('Voyage API キーが未設定です');
@@ -27,6 +28,7 @@ async function call(
       Authorization: `Bearer ${cfg.voyageApiKey}`,
       'content-type': 'application/json',
     },
+    signal,
     body: JSON.stringify({
       input: texts,
       model: cfg.voyageModel,
@@ -50,6 +52,6 @@ export function embedVoyageQuery(text: string, cfg: VoyageConfig): Promise<Float
   return call([text], cfg, 'query');
 }
 
-export function embedVoyageDocs(texts: string[], cfg: VoyageConfig): Promise<Float32Array[]> {
-  return call(texts, cfg, 'document');
+export function embedVoyageDocs(texts: string[], cfg: VoyageConfig, signal?: AbortSignal): Promise<Float32Array[]> {
+  return call(texts, cfg, 'document', signal);
 }

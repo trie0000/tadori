@@ -12,7 +12,7 @@ import { encodeEmbedding } from '../lib/float16';
 import { normalize } from '../search/cosine';
 import { cleanBody } from '../lib/mailtext';
 import {
-  SEGMENT_CAP, nextSegmentIndex, segmentId,
+  nextSegmentIndex, segmentId,
   type Segment, type SegmentRecord,
 } from '../sync/segments';
 import type { RuntimeSettings } from '../api/aiSettings';
@@ -31,16 +31,24 @@ export interface WriteResult {
   added: number;
   skipped: number;
   segments: number;
+  /** 途中停止したか (停止までに保存した分は確定済み)。 */
+  cancelled: boolean;
 }
 
 export type WritePhase = 'sync' | 'embed' | 'upload';
 
-/** 新規メールを埋め込んでセグメント化し SharePoint へ書き込む。 */
+/** 1 バッチ = 1 セグメントで即コミットする件数。停止時の最小ロス単位。 */
+const BATCH = 100;
+
+/** 新規メールを埋め込んでセグメント化し SharePoint へ書き込む。
+ *  signal で途中停止可能。バッチごとに確定するので、停止しても保存済みは残り、
+ *  再実行すると message-id 重複排除で続きから取り込める。 */
 export async function ingestToSegments(
   mails: IngestMail[],
   s: RuntimeSettings,
   siteUrl: string,
   onProgress?: (phase: WritePhase, done: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<WriteResult> {
   // 書き込み権 (リース) を取得。取れなければ他の人が取り込み中。
   if (!await getLease(siteUrl).ensureWriter()) {
@@ -58,56 +66,64 @@ export async function ingestToSegments(
     seen.add(m.messageId);
     return true;
   });
-  if (fresh.length === 0) return { added: 0, skipped: mails.length, segments: 0 };
-
-  // 埋め込み (失敗したら書き込まない: ベクトル無しレコードは検索対象外で無意味)。
-  // バッチで分割して進捗を出す & 1回の巨大リクエストを避ける。
-  const bodies = fresh.map(m => cleanBody(m.body));
-  const EMBED_BATCH = 64;
-  const vecs: Float32Array[] = [];
-  onProgress?.('embed', 0, bodies.length);
-  for (let off = 0; off < bodies.length; off += EMBED_BATCH) {
-    const part = await embedDocsFor(bodies.slice(off, off + EMBED_BATCH), s);
-    for (const v of part) vecs.push(v);
-    onProgress?.('embed', Math.min(off + EMBED_BATCH, bodies.length), bodies.length);
-  }
+  const skipped = mails.length - fresh.length;
+  if (fresh.length === 0) return { added: 0, skipped, segments: 0, cancelled: false };
 
   const manifest = await eng.store.ensureManifest();
   let seq = manifest.maxSeq;
-  const records: SegmentRecord[] = fresh.map((m, i) => ({
-    seq: ++seq,
-    op: 'upsert',
-    messageId: m.messageId,
-    subject: m.subject,
-    from: m.from,
-    to: m.to,
-    cc: m.cc,
-    date: m.date,
-    body: bodies[i],
-    emb: encodeEmbedding(normalize(vecs[i])),
-  }));
-
-  // ≤SEGMENT_CAP 件ずつ新セグメントに分割して UL
   let idx = nextSegmentIndex(manifest.sealed);
-  const newIds: string[] = [];
-  for (let off = 0; off < records.length; off += SEGMENT_CAP) {
+  let added = 0;
+  let segments = 0;
+  let cancelled = false;
+
+  // バッチ単位で「埋め込み → セグメント書込 → manifest 更新」を確定。
+  for (let off = 0; off < fresh.length; off += BATCH) {
+    if (signal?.aborted) { cancelled = true; break; }
+    const part = fresh.slice(off, off + BATCH);
+    // 本文が空 (引用/署名のみ等) のメールは埋め込み API が空文字を拒否するため、
+    // 件名にフォールバックして空文字を送らない。
+    const bodies = part.map(m => cleanBody(m.body) || (m.subject || '').trim() || '(本文なし)');
+
+    let vecs: Float32Array[];
+    try {
+      vecs = await embedDocsFor(bodies, s, signal);
+    } catch (e) {
+      if (signal?.aborted || (e instanceof Error && e.name === 'AbortError')) { cancelled = true; break; }
+      throw e;
+    }
+
+    const records: SegmentRecord[] = part.map((m, i) => ({
+      seq: ++seq,
+      op: 'upsert',
+      messageId: m.messageId,
+      subject: m.subject,
+      from: m.from,
+      to: m.to,
+      cc: m.cc,
+      date: m.date,
+      body: bodies[i],
+      emb: encodeEmbedding(normalize(vecs[i])),
+    }));
+
     const id = segmentId(idx++);
-    const seg: Segment = { id, generation: manifest.generation, records: records.slice(off, off + SEGMENT_CAP) };
+    const seg: Segment = { id, generation: manifest.generation, records };
     await eng.store.writeSegment(seg);
     await eng.cache.put(id, seg);
     eng.db.applySegment(seg);
-    newIds.push(id);
-    onProgress?.('upload', newIds.length, Math.ceil(records.length / SEGMENT_CAP));
+
+    manifest.sealed.push(id);
+    manifest.maxSeq = seq;
+    manifest.version += 1;
+    manifest.updatedAt = new Date().toISOString();
+    await eng.store.writeManifest(manifest);
+    await eng.cache.setManifest(manifest);
+
+    added += records.length;
+    segments++;
+    onProgress?.('upload', added, fresh.length);
   }
 
-  manifest.sealed.push(...newIds);
-  manifest.maxSeq = seq;
-  manifest.version += 1;
-  manifest.updatedAt = new Date().toISOString();
-  await eng.store.writeManifest(manifest);
-  await eng.cache.setManifest(manifest);
-
-  return { added: fresh.length, skipped: mails.length - fresh.length, segments: newIds.length };
+  return { added, skipped, segments, cancelled };
 }
 
 /** 指定メールを削除 (tombstone を 1 件のセグメントとして追記)。 */

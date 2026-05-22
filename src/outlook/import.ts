@@ -24,7 +24,7 @@ export interface ImportFilter {
 }
 
 /** relay 経由で Outlook からメールを取得。 */
-export async function fetchOutlookMails(relayBaseUrl: string, f: ImportFilter): Promise<OutlookMail[]> {
+export async function fetchOutlookMails(relayBaseUrl: string, f: ImportFilter, signal?: AbortSignal): Promise<OutlookMail[]> {
   if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です (AI 接続で設定)');
   const p = new URLSearchParams();
   if (f.to.length) p.set('to', f.to.join(';'));
@@ -34,7 +34,7 @@ export async function fetchOutlookMails(relayBaseUrl: string, f: ImportFilter): 
   if (f.max) p.set('max', String(f.max));
 
   const url = `${relayBaseUrl.replace(/\/+$/, '')}/tadori/outlook/import?${p.toString()}`;
-  const res = await fetch(url, { method: 'GET' });
+  const res = await fetch(url, { method: 'GET', signal });
   if (!res.ok) {
     const b = await res.text().catch(() => '');
     throw new Error(`Outlook インポート失敗: HTTP ${res.status} ${b.slice(0, 300)}`);

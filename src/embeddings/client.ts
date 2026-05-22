@@ -22,6 +22,7 @@ export async function embedTexts(
   texts: string[],
   cfg: EmbedConfig,
   auth: EmbedAuth,
+  signal?: AbortSignal,
 ): Promise<Float32Array[]> {
   if (texts.length === 0) return [];
 
@@ -37,6 +38,7 @@ export async function embedTexts(
     method: 'POST',
     headers,
     credentials: 'omit',
+    signal,
     body: JSON.stringify({ input: texts, dimensions: cfg.dimensions }),
   });
 

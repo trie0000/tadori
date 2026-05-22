@@ -242,7 +242,13 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
   const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);margin-top:var(--s-3)' }, ['']);
   const btn = el('button', { class: 'tdr-btn tdr-btn--primary', style: 'margin-top:var(--s-4)' }, ['Outlook から取り込む']);
 
+  const RUN_LABEL = 'Outlook から取り込む';
+  let ac: AbortController | null = null;
+
   btn.addEventListener('click', () => {
+    // 実行中にもう一度押す = 停止
+    if (ac) { ac.abort(); btn.textContent = '停止中…'; return; }
+
     const filter = {
       to: parseAddressList(toArea.value),
       cc: parseAddressList(ccArea.value),
@@ -250,35 +256,47 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       until: untilInp.value || undefined,
       max: Number(maxInp.value) || 1000,
     };
-    btn.disabled = true;
+    ac = new AbortController();
+    const signal = ac.signal;
+    btn.textContent = '停止';
     status.textContent = 'Outlook を検索中…';
     void (async () => {
       try {
         // ① まず対象件数を取得して提示
-        const mails = await fetchOutlookMails(draft.relayBaseUrl, filter);
+        const mails = await fetchOutlookMails(draft.relayBaseUrl, filter, signal);
         if (mails.length === 0) {
           status.textContent = '該当するメールがありませんでした (条件・期間を確認)';
           toast(root, '該当メール 0 件', 'warn');
           return;
         }
         status.textContent = `対象 ${mails.length} 件が見つかりました`;
-        if (!confirm(`Outlook から ${mails.length} 件取り込みます。よろしいですか?`)) {
+        if (!confirm(`Outlook から ${mails.length} 件取り込みます。よろしいですか? (実行中は「停止」で中断可)`)) {
           status.textContent = `キャンセル (対象 ${mails.length} 件)`;
           return;
         }
-        // ② 埋め込み → 投入 (進捗表示)
+        // ② 埋め込み → 投入 (進捗表示・停止可)
         const r = await ingestToSegments(toIngestMails(mails), draft, siteUrl, (phase, done, total) => {
-          const label = phase === 'sync' ? '準備中' : phase === 'embed' ? '埋め込み中' : '投入中';
+          const label = phase === 'sync' ? '準備中' : '取り込み中';
           status.textContent = total ? `${label}… ${done}/${total} (対象 ${mails.length} 件)` : `${label}…`;
-        });
+        }, signal);
         const dup = r.skipped ? ` / 重複スキップ ${r.skipped} 件` : '';
-        status.textContent = `完了: 取得 ${mails.length} 件 / 新規 ${r.added} 件 (セグメント ${r.segments})${dup}`;
-        toast(root, `Outlook から ${r.added} 件取り込みました`, 'ok');
+        if (r.cancelled) {
+          status.textContent = `停止しました: 保存済み 新規 ${r.added} 件 (セグメント ${r.segments})${dup}。再実行で続きから取り込めます。`;
+          toast(root, `停止 (新規 ${r.added} 件は保存済み)`, 'warn');
+        } else {
+          status.textContent = `完了: 取得 ${mails.length} 件 / 新規 ${r.added} 件 (セグメント ${r.segments})${dup}`;
+          toast(root, `Outlook から ${r.added} 件取り込みました`, 'ok');
+        }
       } catch (e) {
-        status.textContent = '失敗';
-        toast(root, `インポート失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+        if (signal.aborted || (e instanceof Error && e.name === 'AbortError')) {
+          status.textContent = '停止しました';
+        } else {
+          status.textContent = '失敗';
+          toast(root, `インポート失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+        }
       } finally {
-        btn.disabled = false;
+        ac = null;
+        btn.textContent = RUN_LABEL;
       }
     })();
   });

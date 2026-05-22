@@ -16,9 +16,9 @@ export async function embedQueryFor(text: string, s: RuntimeSettings): Promise<F
   return v;
 }
 
-export async function embedDocsFor(texts: string[], s: RuntimeSettings): Promise<Float32Array[]> {
+export async function embedDocsFor(texts: string[], s: RuntimeSettings, signal?: AbortSignal): Promise<Float32Array[]> {
   if (s.provider === 'claude') {
-    return embedVoyageDocs(texts, s);
+    return embedVoyageDocs(texts, s, signal);
   }
-  return embedTexts(texts, s, { apiKey: s.apiKey });
+  return embedTexts(texts, s, { apiKey: s.apiKey }, signal);
 }
