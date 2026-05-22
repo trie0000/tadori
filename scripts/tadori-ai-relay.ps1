@@ -370,10 +370,12 @@ function Invoke-OutlookImport {
     $ccAddrs = @(& $split $q['cc'])
     $max = 1000
     if ($q['max']) { $tmp = 0; if ([int]::TryParse($q['max'], [ref]$tmp)) { $max = $tmp } }
-    $sinceDt = (Get-Date).AddYears(-10)
-    $untilDt = (Get-Date).AddDays(1)
-    if ($q['since']) { try { $sinceDt = [DateTime]::Parse($q['since']) } catch { } }
-    if ($q['until']) { try { $untilDt = [DateTime]::Parse($q['until']) } catch { } }
+    # 日付は「その日いっぱい」を含めたいので、since はその日の 0:00、until は
+    # 翌日 0:00 とし、上限は < で比較する (同日指定でもその日が丸ごと範囲に入る)。
+    $sinceDt = (Get-Date).Date.AddYears(-10)
+    $untilDt = (Get-Date).Date.AddDays(1)
+    if ($q['since']) { try { $sinceDt = [DateTime]::Parse($q['since']).Date } catch { } }
+    if ($q['until']) { try { $untilDt = [DateTime]::Parse($q['until']).Date.AddDays(1) } catch { } }
 
     $ol = Get-OutlookOrNull
     if (-not $ol) {
@@ -384,7 +386,7 @@ function Invoke-OutlookImport {
     try {
         $ns = $ol.GetNamespace('MAPI')
         # ReceivedTime は Outlook ロケール依存。MM/dd/yyyy HH:mm が無難。
-        $filter = "[ReceivedTime] >= '" + $sinceDt.ToString('MM/dd/yyyy HH:mm') + "' AND [ReceivedTime] <= '" + $untilDt.ToString('MM/dd/yyyy HH:mm') + "'"
+        $filter = "[ReceivedTime] >= '" + $sinceDt.ToString('MM/dd/yyyy HH:mm') + "' AND [ReceivedTime] < '" + $untilDt.ToString('MM/dd/yyyy HH:mm') + "'"
 
         $matches = {
             param($mail)
@@ -419,7 +421,7 @@ function Invoke-OutlookImport {
             }
         }
 
-        Write-Host ("[import] matched {0} mails (to=[{1}] cc=[{2}] {3}..{4})" -f $results.Count, ($toAddrs -join ','), ($ccAddrs -join ','), $sinceDt.ToString('yyyy-MM-dd'), $untilDt.ToString('yyyy-MM-dd'))
+        Write-Host ("[import] matched {0} mails (to=[{1}] cc=[{2}] {3}..{4})" -f $results.Count, ($toAddrs -join ','), ($ccAddrs -join ','), $sinceDt.ToString('yyyy-MM-dd'), $untilDt.AddDays(-1).ToString('yyyy-MM-dd'))
         Send-Json -Response $response -Status 200 -Body @{ ok = $true; count = $results.Count; mails = @($results) }
     }
     catch {
