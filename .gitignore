@@ -1,7 +1,10 @@
 node_modules/
-dist/
 *.local
 .DS_Store
+
+# dist/ はコミットする (業務PCで npm/ビルド不可のため、ビルド済み成果物を同梱)。
+# ソースマップだけは除外。
+dist/*.map
 
 # 秘密情報を含む relay 設定 (env.example のみコミット)
 scripts/*.env

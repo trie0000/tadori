@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tadori インストール</title>
+<style>
+  :root {
+    --ink: #2a2a26; --ink-3: #7a766c; --ink-4: #a8a39a;
+    --paper: #fafaf7; --paper-2: #f3f1ea; --paper-3: #e8e4d8;
+    --line: rgba(42,42,38,0.12);
+    --accent: #7a8a78; --accent-strong: #5e6f5c;
+    --code-fg: #8b3a30; --code-bg: rgba(122,118,108,0.16);
+    --font: "Meiryo","メイリオ","Hiragino Sans","Yu Gothic UI",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --font-mono: ui-monospace,"Cascadia Mono","Consolas",monospace;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: var(--font); max-width: 580px; margin: 60px auto; padding: 0 24px; color: var(--ink); line-height: 1.75; background: var(--paper); }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 12px; }
+  h1 .mark { font-family: var(--font-mono); color: var(--accent-strong); }
+  .sub { color: var(--ink-3); font-size: 14px; margin: 0 0 40px; }
+  .step { display: flex; gap: 16px; margin-bottom: 28px; align-items: flex-start; }
+  .step-num { width: 28px; height: 28px; background: var(--accent); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+  .step-body h3 { font-size: 16px; font-weight: 600; margin: 0 0 4px; color: var(--ink); }
+  .step-body p { font-size: 14px; color: var(--ink-3); margin: 0; }
+  .bm-wrap { background: var(--paper-2); border: 2px dashed var(--paper-3); border-radius: 8px; padding: 28px; text-align: center; margin: 20px 0 32px; }
+  .bm-wrap p { font-size: 13px; color: var(--ink-3); margin: 0 0 16px; }
+  #bm-link {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--accent); color: #fff; text-decoration: none;
+    padding: 12px 24px; border-radius: 6px; font-size: 16px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(122,138,120,.25); cursor: grab; user-select: none;
+  }
+  #bm-link:hover { background: var(--accent-strong); }
+  #bm-link .mark { font-family: var(--font-mono); }
+  hr { border: none; border-top: 1px solid var(--paper-3); margin: 32px 0; }
+  .alt { font-size: 13px; color: var(--ink-3); }
+  code { background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 3px; font-size: 12px; font-family: var(--font-mono); }
+  .note { background: rgba(196,127,28,0.10); border-left: 3px solid #c47f1c; padding: 12px 16px; border-radius: 4px; font-size: 13px; color: var(--ink); margin-top: 24px; }
+</style>
+</head>
+<body>
+
+<h1><span class="mark">辿</span> Tadori インストール</h1>
+<p class="sub">SharePoint 上で動く ML メール検索 (RAG) — bookmarklet 形式 / ローダー方式</p>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <h3>ブックマークバーを表示する</h3>
+    <p>Chrome / Edge: <code>Ctrl+Shift+B</code>（Mac: <code>Cmd+Shift+B</code>）</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <h3>下のボタンをブックマークバーにドラッグ</h3>
+    <p>右クリック → 「リンクをブックマーク」 でも OK です。</p>
+  </div>
+</div>
+
+<div class="bm-wrap">
+  <p>↓ このボタンをブックマークバーにドラッグ ↓</p>
+  <a id="bm-link" href="javascript:(function()%7Bvar%20d%3Ddocument%2Cw%3Dwindow%3Bfunction%20SP()%7Btry%7Bvar%20c%3Dw._spPageContextInfo%3Bif(c%26%26c.webServerRelativeUrl)return%20c.webServerRelativeUrl.replace(%2F%5C%2F%24%2F%2C'')%2B%22%2FShared%2520Documents%2FTadori%22%3B%7Dcatch(e)%7B%7Dreturn%20''%3B%7Dvar%20sp%3DSP()%2Cdev%3D''%3Btry%7Bif(w.localStorage%26%26localStorage.getItem('tadori.dev.bundle-source')%3D%3D%3D'local')dev%3D(localStorage.getItem('tadori.dev.local-base')%7C%7C'http%3A%2F%2F127.0.0.1%3A18080%2Ftadori').replace(%2F%5C%2F%2B%24%2F%2C'')%3B%7Dcatch(e)%7B%7Dvar%20primary%3Ddev%7C%7C%22%22%7C%7Csp%3Bvar%20fb%3D(primary!%3D%3Dsp%26%26sp)%3Fsp%3A''%3Bfunction%20inject(base%2Cver)%7Bvar%20o%3Dd.getElementById('tadori-script')%3Bif(o)o.remove()%3Bvar%20s%3Dd.createElement('script')%3Bs.id%3D'tadori-script'%3Bs.src%3Dbase%2B'%2Ftadori.bundle.js%3Fv%3D'%2BencodeURIComponent(ver)%3Bs.onerror%3Dfunction()%7Bif(fb)%7Bvar%20x%3Dfb%3Bfb%3D''%3Bgo(x)%3B%7D%7D%3Bd.body.appendChild(s)%3B%7Dfunction%20go(base)%7Bfetch(base%2B'%2Fversion.txt%3Ft%3D'%2BDate.now()%2C%7Bcredentials%3A'include'%7D).then(function(r)%7Bif(!r.ok)throw%200%3Breturn%20r.text()%3B%7D).then(function(t)%7Binject(base%2C(t%7C%7C'').trim()%7C%7CString(Date.now()))%3B%7D).catch(function()%7Bif(fb)%7Bvar%20x%3Dfb%3Bfb%3D''%3Bgo(x)%3B%7Delse%7Binject(base%2CString(Date.now()))%3B%7D%7D)%3B%7Dgo(primary)%3B%7D)()%3B" onclick="alert('ドラッグしてブックマークバーに登録してください。クリックでは起動しません（このページは SharePoint ではないため）。'); return false;"><span class="mark">辿</span> Tadori</a>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-body">
+    <h3>SharePoint サイトを開いて、ブックマークをクリック</h3>
+    <p>同一テナントの SP サイト上でブックマークを実行すると Tadori が起動します。<br>
+       初回は 歯車 → 設定 → 取り込みで List 名、AI 接続で中継サーバ / モデルを設定してください。</p>
+  </div>
+</div>
+
+<hr>
+
+<p class="alt"><strong>更新方法</strong>: 本体 (tadori.bundle.js) を新ビルドに差し替えるだけ。ブックマークの再登録は不要です (ローダーが version.txt を見て自動更新)。</p>
+
+<div class="note">
+  ⚠ <strong>SharePoint 上で実行する必要があります</strong>。Graph API・外部 SaaS 不要で、SP REST API（同一オリジン Cookie 認証）のみを使用します。
+</div>
+
+</body>
+</html>
