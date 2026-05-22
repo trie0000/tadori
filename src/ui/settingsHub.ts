@@ -24,7 +24,7 @@ import { ingestToSegments } from '../db/writer';
 import { getEngine } from '../db/engine';
 import { fetchMonthlyTotals, currentUser } from '../usage/tracker';
 
-type SectionId = 'ai' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev';
+type SectionId = 'ai' | 'search' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev';
 
 // メニュー構成は固定 (Spira と同じグループ流儀)。むやみに名前を変えないこと。
 const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[] = [
@@ -33,6 +33,7 @@ const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[]
   ] },
   { title: 'AI / 自動化', items: [
     { id: 'ai',     label: 'AI 設定' },
+    { id: 'search', label: '検索' },
     { id: 'ingest', label: '取り込み' },
     { id: 'diag',   label: '診断' },
     { id: 'usage',  label: '利用料' },
@@ -64,6 +65,7 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
     pane.textContent = '';
     switch (id) {
       case 'ai':      buildAiPane(pane, draft); break;
+      case 'search':  buildSearchPane(pane, draft); break;
       case 'ingest':  buildIngestPane(pane, draft, root, siteUrl); break;
       case 'display': buildDisplayPane(pane, root); break;
       case 'diag':    buildDiagPane(pane, draft, root, siteUrl); break;
@@ -190,6 +192,23 @@ function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
   }
   select.addEventListener('change', () => { draft.provider = select.value as Provider; sync(); });
   sync();
+}
+
+// ─── 検索 ─────────────────────────────────────────────────────────────────────
+
+function buildSearchPane(pane: HTMLElement, draft: RuntimeSettings): void {
+  paneHead(pane, '検索', '回答の根拠にする参照メールの取り方を調整します。多いほど網羅的ですが、プロンプトが長くなり利用料も増えます。');
+
+  const grid = el('div', { class: 'tdr-fieldgrid' });
+  grid.append(
+    ...mkRow('参照件数 (1〜20)', mkInput(String(draft.ragTopK), v => {
+      draft.ragTopK = Math.min(20, Math.max(1, Number(v) || 8));
+    }), '上位何件のメールを根拠にするか。デフォルト 8'),
+    ...mkRow('最小スコア (0〜1)', mkInput(String(draft.ragMinScore), v => {
+      const n = Number(v); draft.ragMinScore = isNaN(n) ? 0.3 : Math.min(1, Math.max(0, n));
+    }), 'cosine 類似度がこの値未満のメールは除外。デフォルト 0.3 (0 で無効)'),
+  );
+  pane.appendChild(grid);
 }
 
 // ─── 取り込み ─────────────────────────────────────────────────────────────────

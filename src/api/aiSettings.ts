@@ -79,6 +79,8 @@ const KEY = {
   mlAddresses:         'tadori:ml-addresses',
   ingestIntervalSec:   'tadori:ingest-interval-sec',
   embedConcurrency:    'tadori:embed-concurrency',
+  ragTopK:             'tadori:rag-topk',
+  ragMinScore:         'tadori:rag-min-score',
 } as const;
 
 const DEFAULT_SUFFIX = ':default';
@@ -178,6 +180,8 @@ export interface RuntimeSettings {
   mlAddresses: string[];
   ingestIntervalSec: number;
   embedConcurrency: number;
+  ragTopK: number;
+  ragMinScore: number;
 }
 
 /** provider を解決。開発者モード OFF のときは 'claude' を 'corp' に丸める。 */
@@ -220,6 +224,8 @@ export function loadSettings(): RuntimeSettings {
     mlAddresses: parseAddressList(lsGet(KEY.mlAddresses)),
     ingestIntervalSec: Number(lsGet(KEY.ingestIntervalSec) || '30') || 30,
     embedConcurrency: Math.min(10, Math.max(1, Number(lsGet(KEY.embedConcurrency) || '3') || 3)),
+    ragTopK: Math.min(20, Math.max(1, Number(lsGet(KEY.ragTopK) || '8') || 8)),
+    ragMinScore: parseMinScore(lsGet(KEY.ragMinScore)),
   };
 }
 
@@ -242,6 +248,14 @@ export function saveSettings(s: Partial<RuntimeSettings>): void {
   if (s.mlAddresses !== undefined)      lsSet(KEY.mlAddresses, s.mlAddresses.join('\n'));
   if (s.ingestIntervalSec !== undefined) lsSet(KEY.ingestIntervalSec, String(s.ingestIntervalSec));
   if (s.embedConcurrency !== undefined)  lsSet(KEY.embedConcurrency, String(Math.min(10, Math.max(1, s.embedConcurrency))));
+  if (s.ragTopK !== undefined)           lsSet(KEY.ragTopK, String(Math.min(20, Math.max(1, Math.round(s.ragTopK)))));
+  if (s.ragMinScore !== undefined)       lsSet(KEY.ragMinScore, String(Math.min(1, Math.max(0, s.ragMinScore))));
+}
+
+function parseMinScore(raw: string): number {
+  if (raw === '') return 0.3;
+  const n = Number(raw);
+  return isNaN(n) ? 0.3 : Math.min(1, Math.max(0, n));
 }
 
 export function parseAddressList(raw: string): string[] {

@@ -192,7 +192,10 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const s = loadSettings();
 
     try {
-      const hits = await searchVectors(q, s, siteUrl, 5);
+      const raw = await searchVectors(q, s, siteUrl, s.ragTopK);
+      // スコアしきい値で足切り。全部下回ったら最良 1 件だけ残す (取りこぼし防止)。
+      let hits = raw.filter(h => h.score >= s.ragMinScore);
+      if (hits.length === 0 && raw.length > 0) hits = [raw[0]];
       if (hits.length === 0) {
         refs.answerText.textContent = '該当するメールが見つかりませんでした。';
         return;
