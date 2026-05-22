@@ -128,7 +128,7 @@
 
 /* toast */
 #tadori-root .tdr-toast-stack{position:fixed;top:var(--s-7);right:var(--s-7);z-index:2147483800;display:flex;flex-direction:column;gap:var(--s-3);pointer-events:none;}
-#tadori-root .tdr-toast{background:var(--paper);border:1px solid var(--line-strong);border-left:3px solid var(--accent);border-radius:var(--r-3);box-shadow:var(--shadow-modal);padding:var(--s-4) var(--s-6);font-size:var(--fs-md);color:var(--ink);max-width:360px;pointer-events:auto;user-select:text;-webkit-user-select:text;cursor:text;}
+#tadori-root .tdr-toast{background:var(--paper);border:1px solid var(--line-strong);border-left:3px solid var(--accent);border-radius:var(--r-3);box-shadow:var(--shadow-modal);padding:var(--s-4) var(--s-6);font-size:var(--fs-md);color:var(--ink);max-width:360px;pointer-events:auto;}
 #tadori-root .tdr-toast--error{border-left-color:var(--danger);}
 #tadori-root .tdr-toast--warn{border-left-color:var(--warn);}
 #tadori-root .tdr-toast--ok{border-left-color:var(--ok);}
