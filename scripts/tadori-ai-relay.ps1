@@ -51,10 +51,17 @@ param(
     # 社内ゲートウェイが自己署名証明書の場合 (要セキュリティ承認)
     [switch]$SkipCertCheck,
     # 環境設定ファイルのパス (既定: スクリプトと同じフォルダの tadori-ai-relay.env)
-    [string]$EnvFile
+    [string]$EnvFile,
+    # 開発者モードでローカル配信するバンドルの dist フォルダ (既定: ../dist)
+    [string]$BundleDir
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 開発者モードのローカル配信フォルダ (tadori.bundle.js / version.txt をここから配る)。
+$script:BundleDir = if ($BundleDir) { $BundleDir }
+    elseif ($env:TADORI_BUNDLE_DIR) { $env:TADORI_BUNDLE_DIR }
+    else { Join-Path $PSScriptRoot '..\dist' }
 
 # ─── Load .env file ─────────────────────────────────────────────────────────
 # 同じフォルダの `tadori-ai-relay.env` を読み、まだ設定されていない
@@ -185,7 +192,11 @@ Write-Host ('-' * 72)
 Write-Host 'エンドポイント:'
 Write-Host "  GET  $baseUrlShort/tadori/health           (死活確認)"
 Write-Host "  GET  $baseUrlShort/tadori/outlook/import   (Outlook からメール読込: ?to=&cc=&since=&until=&max=)"
+Write-Host "  GET  $baseUrlShort/tadori/tadori.bundle.js (開発: ローカル dist のバンドル配信)"
+Write-Host "  GET  $baseUrlShort/tadori/version.txt      (開発: ローカル dist のバージョン配信)"
+Write-Host "  $baseUrlShort/tadori/bundle-dir            (開発: 配信フォルダの確認 GET / 変更 POST)"
 Write-Host "  *    $baseUrlShort/...                      (上記以外は target へ透過 forward)"
+Write-Host "  bundle dir: $script:BundleDir"
 Write-Host ''
 Write-Host 'Tadori runtime / PoC のベース URL に下記を入力:'
 Write-Host "  A: $baseUrlShort"
@@ -249,6 +260,31 @@ function Send-Json {
         $Response.OutputStream.Write($bytes, 0, $bytes.Length)
     } catch { }
     finally { try { $Response.OutputStream.Close() } catch { } }
+}
+
+# 静的ファイル配信 (開発者モードのローカルバンドル用)。
+function Send-StaticFile {
+    param(
+        [System.Net.HttpListenerResponse]$Response,
+        [string]$FilePath,
+        [string]$ContentType
+    )
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        Send-Json -Response $Response -Status 404 -Body @{ ok = $false; error = @{ code = 'not_found'; detail = "File not found: $FilePath" } }
+        return
+    }
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        Add-CorsHeaders -Response $Response
+        $Response.StatusCode = 200
+        $Response.ContentType = $ContentType
+        $Response.Headers.Add('Cache-Control', 'no-store') # loader は ?v= でバスティングするが念のため
+        $Response.ContentLength64 = $bytes.Length
+        $Response.OutputStream.Write($bytes, 0, $bytes.Length)
+        $Response.OutputStream.Close()
+    } catch {
+        Send-Json -Response $Response -Status 500 -Body @{ ok = $false; error = @{ code = 'read_error'; detail = $_.Exception.Message } }
+    }
 }
 
 # ─── Outlook COM (メールインポート) ─────────────────────────────────────────
@@ -408,6 +444,39 @@ function Invoke-RelayRequest {
     if ($path -eq '/tadori/outlook/import') {
         Invoke-OutlookImport -Context $Context
         return
+    }
+
+    # ── 開発者モード: ローカル dist のバンドル配信 (loader が読む) ──
+    if ($path -eq '/tadori/tadori.bundle.js') {
+        Send-StaticFile -Response $response -FilePath (Join-Path $script:BundleDir 'tadori.bundle.js') -ContentType 'application/javascript; charset=utf-8'
+        return
+    }
+    if ($path -eq '/tadori/version.txt') {
+        Send-StaticFile -Response $response -FilePath (Join-Path $script:BundleDir 'version.txt') -ContentType 'text/plain; charset=utf-8'
+        return
+    }
+    if ($path -eq '/tadori/bundle-dir') {
+        if ($method -eq 'GET') {
+            $exists = Test-Path -LiteralPath $script:BundleDir
+            $hasBundle = Test-Path -LiteralPath (Join-Path $script:BundleDir 'tadori.bundle.js')
+            Send-Json -Response $response -Status 200 -Body @{ ok = $true; dir = "$script:BundleDir"; exists = [bool]$exists; hasBundle = [bool]$hasBundle }
+            return
+        }
+        if ($method -eq 'POST') {
+            try {
+                $reader = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                $raw = $reader.ReadToEnd(); $reader.Dispose() | Out-Null
+                $p = if ($raw) { $raw | ConvertFrom-Json } else { $null }
+                $dir = "$($p.dir)".Trim()
+                if ($dir) { $script:BundleDir = $dir; Write-Host "[bundle] dir set to: $dir" }
+                $exists = Test-Path -LiteralPath $script:BundleDir
+                $hasBundle = Test-Path -LiteralPath (Join-Path $script:BundleDir 'tadori.bundle.js')
+                Send-Json -Response $response -Status 200 -Body @{ ok = $true; dir = "$script:BundleDir"; exists = [bool]$exists; hasBundle = [bool]$hasBundle }
+            } catch {
+                Send-Json -Response $response -Status 400 -Body @{ ok = $false; error = @{ code = 'bad_request'; detail = $_.Exception.Message } }
+            }
+            return
+        }
     }
 
     # ── Compose upstream URL ──

@@ -13,6 +13,10 @@ import {
   type RuntimeSettings, type Provider,
 } from '../api/aiSettings';
 import { isDeveloperMode, setDeveloperMode } from '../utils/devMode';
+import {
+  getBundleSource, setBundleSource, getLocalBase, setLocalBase,
+  getRelayBundleDir, setRelayBundleDir, DEFAULT_LOCAL_BASE, type BundleSource,
+} from '../utils/bundleSource';
 import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
@@ -389,7 +393,7 @@ function buildDevPane(
   // テストデータ投入
   pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, [`テストデータ投入 (${SAMPLE_MAILS.length} 件)`]));
   pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin-bottom:var(--s-4)' }, [
-    `現在の provider で本文を埋め込み、List「${draft.listTitle}」へサンプルメールを作成します。`,
+    '現在の provider で本文を埋め込み、ベクトルDB (SharePoint のセグメント) へサンプルメールを投入します。',
   ]));
 
   const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);margin-top:var(--s-3)' }, ['']);
@@ -416,6 +420,67 @@ function buildDevPane(
   });
 
   pane.append(seedBtn, status);
+
+  buildBundleSourcePane(pane, root);
+}
+
+// 開発: バンドル読み込み元 (SharePoint / ローカル relay) の切替。Spira と同等。
+function buildBundleSourcePane(pane: HTMLElement, root: HTMLElement): void {
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['バンドル読み込み元']));
+  pane.appendChild(el('div', { class: 'tdr-pane-desc' }, [
+    'Tadori 本体 (tadori.bundle.js) をどこから読むか。テスト時にローカル relay が配信する dist を読ませる用途。切替は次回リロードで反映 (ローダーは起動時に1度だけ参照先を決めるため)。',
+  ]));
+
+  const cur = getBundleSource();
+  const radioSP = el('input', { type: 'radio', name: 'tdr-bundle-src', value: 'sharepoint' });
+  const radioLocal = el('input', { type: 'radio', name: 'tdr-bundle-src', value: 'local' });
+  (cur === 'local' ? radioLocal : radioSP).checked = true;
+  const baseInp = el('input', { class: 'tdr-input', type: 'text', value: getLocalBase(), placeholder: DEFAULT_LOCAL_BASE });
+  const dirInp = el('input', { class: 'tdr-input', type: 'text', placeholder: 'C:\\tools\\tadori\\dist (relay の配信フォルダ)' });
+  const dirStatus = el('p', { class: 'tdr-hint' }, ['relay に照会中…']);
+
+  void getRelayBundleDir().then(r => {
+    if (!r) { dirStatus.textContent = '⚠ relay 未起動 / 応答なし'; return; }
+    if (!dirInp.value) dirInp.value = r.dir;
+    dirStatus.textContent = `現在: ${r.dir}  ${r.hasBundle ? '✅ tadori.bundle.js あり' : '⚠ tadori.bundle.js が無い'}`;
+  });
+
+  const radioRow = (input: HTMLInputElement, label: string, hint: string) =>
+    el('label', { style: 'display:flex;align-items:flex-start;gap:var(--s-3);cursor:pointer;padding:var(--s-3);background:var(--paper-2);border-radius:var(--r-2);margin-bottom:var(--s-2)' }, [
+      input,
+      el('span', { style: 'font-size:var(--fs-sm)' }, [el('strong', {}, [label]), el('br'), el('span', { class: 'tdr-hint' }, [hint])]),
+    ]);
+
+  const grid = el('div', { class: 'tdr-fieldgrid', style: 'margin-top:var(--s-4)' });
+  grid.append(
+    ...mkRow('ローカル base', baseInp, '例: http://127.0.0.1:18080/tadori'),
+    el('label', { class: 'top' }, ['relay 配信フォルダ']),
+    dirInp,
+    dirStatus,
+  );
+
+  const saveBtn = el('button', { class: 'tdr-btn', style: 'margin-top:var(--s-4)' }, ['保存 (次回リロードで反映)']);
+  saveBtn.addEventListener('click', () => {
+    void (async () => {
+      setBundleSource(radioLocal.checked ? 'local' : 'sharepoint');
+      setLocalBase(baseInp.value);
+      const dir = dirInp.value.trim();
+      if (dir) {
+        const r = await setRelayBundleDir(dir);
+        if (r) dirStatus.textContent = `現在: ${r.dir}  ${r.hasBundle ? '✅ あり' : '⚠ bundle 無し'}`;
+        else { toast(root, 'relay へのフォルダ設定に失敗 (relay 未起動?)', 'warn'); return; }
+      }
+      const src: BundleSource = radioLocal.checked ? 'local' : 'sharepoint';
+      toast(root, `読み込み元: ${src === 'local' ? 'ローカル relay' : 'SharePoint'}。リロードで反映`, 'ok');
+    })();
+  });
+
+  pane.append(
+    radioRow(radioSP, 'SharePoint (本番)', '実行サイトの ドキュメント/Tadori から読む'),
+    radioRow(radioLocal, 'ローカル relay (開発)', '下記 base から読む。relay が dist を配信'),
+    grid,
+    saveBtn,
+  );
 }
 
 // ─── About ────────────────────────────────────────────────────────────────────
