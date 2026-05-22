@@ -13,4 +13,6 @@ export const icons = {
   chevron: (s?: number) => wrap('<path d="m6 9 6 6 6-6"/>', s),
   door: (s?: number) => wrap('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>', s),
   external: (s?: number) => wrap('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/>', s),
+  plus: (s?: number) => wrap('<path d="M12 5v14M5 12h14"/>', s),
+  message: (s?: number) => wrap('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>', s),
 };
