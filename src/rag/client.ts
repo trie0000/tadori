@@ -29,6 +29,57 @@ function buildUserPrompt(question: string, sources: RagSource[]): string {
   return `参照メール:\n\n${ctx}\n\n---\n\n質問: ${question}`;
 }
 
+const TITLE_SYSTEM = [
+  '次のユーザーの質問を、日本語で15文字以内の短い見出しに要約してください。',
+  '見出しの語句だけを返し、句読点・記号・引用符・接頭辞は付けないでください。',
+].join('\n');
+
+function cleanTitle(t: string): string {
+  return (t || '')
+    .split('\n')[0]
+    .replace(/^["'「『（(]+|["'」』）)]+$/g, '')
+    .trim()
+    .slice(0, 30);
+}
+
+/** 質問を短い見出しに要約 (チャット履歴のタイトル用)。失敗時は空文字。 */
+export async function summarizeTitle(question: string, s: RuntimeSettings, signal?: AbortSignal): Promise<string> {
+  const inTok = estimateTokens(TITLE_SYSTEM) + estimateTokens(question);
+  try {
+    if (s.provider === 'claude') {
+      const t = await streamClaude({
+        apiKey: s.claudeApiKey, model: s.claudeModel, system: TITLE_SYSTEM,
+        messages: [{ role: 'user', content: question }], onText: () => { /* noop */ }, signal,
+      });
+      recordChat(s.claudeModel, inTok, estimateTokens(t));
+      return cleanTitle(t);
+    }
+
+    const url = `${s.chatBaseUrl.replace(/\/+$/, '')}`
+      + `/openai/deployments/${encodeURIComponent(s.chatDeployment)}`
+      + `/chat/completions?api-version=${encodeURIComponent(s.chatApiVersion)}`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (s.apiKey) headers['api-key'] = s.apiKey;
+    const res = await fetch(url, {
+      method: 'POST', headers, credentials: 'omit', signal,
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: TITLE_SYSTEM },
+          { role: 'user', content: question },
+        ],
+        stream: false,
+      }),
+    });
+    if (!res.ok) return '';
+    const json = await res.json() as { choices?: { message?: { content?: string } }[] };
+    const content = json.choices?.[0]?.message?.content ?? '';
+    recordChat(s.chatModel, inTok, estimateTokens(content));
+    return cleanTitle(content);
+  } catch {
+    return '';
+  }
+}
+
 /** chat/completions をストリーミング呼び出し。onDelta で逐次トークンを受け取る。 */
 export async function generateAnswer(
   question: string,

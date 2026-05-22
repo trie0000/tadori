@@ -247,7 +247,9 @@ window.fetch = async (url, opts) => {
     return jsonResponse({ data });
   }
   if (u.includes('/chat/completions')) {
+    let stream = true; try { stream = JSON.parse(opts.body).stream !== false; } catch {}
     await new Promise(r => setTimeout(r, 150));
+    if (!stream) return jsonResponse({ choices: [{ message: { content: '懇親会の会費' } }] });
     return sseResponse(MOCK_ANSWER);
   }
   return realFetch(url, opts);

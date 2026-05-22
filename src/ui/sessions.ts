@@ -78,6 +78,16 @@ export function appendTurn(id: string, turn: SavedTurn): ChatSession {
   return s;
 }
 
+export function setTitle(id: string, title: string): void {
+  const t = title.trim();
+  if (!t) return;
+  const list = lsGet();
+  const s = list.find(x => x.id === id);
+  if (!s) return;
+  s.title = t.slice(0, 40);
+  lsSet(list);
+}
+
 export function deleteSession(id: string): void {
   lsSet(lsGet().filter(s => s.id !== id));
 }

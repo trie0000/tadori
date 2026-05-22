@@ -7,14 +7,24 @@ import { icons } from './icons';
 import { toast } from './toast';
 import { searchVectors } from '../search/vectorSearch';
 import { htmlToText, renderMailBody } from '../lib/mailhtml';
-import { generateAnswer, type RagSource } from '../rag/client';
+import { generateAnswer, summarizeTitle, type RagSource } from '../rag/client';
 import { loadSettings } from '../api/aiSettings';
 import { renderMarkdown } from '../lib/markdown';
 import { openMailInOutlook } from '../outlook/import';
 import {
-  listSessions, getSession, appendTurn, deleteSession, newSessionId,
+  listSessions, getSession, appendTurn, setTitle, deleteSession, newSessionId,
   type ChatSession, type SavedHit,
 } from './sessions';
+
+/** 「処理中」を示すアニメーション付きインジケータ。 */
+function thinkingEl(text: string): HTMLElement {
+  return el('span', { class: 'tdr-thinking' }, [
+    text,
+    el('span', { class: 'tdr-dot' }),
+    el('span', { class: 'tdr-dot' }),
+    el('span', { class: 'tdr-dot' }),
+  ]);
+}
 
 const SIDEBAR_W_KEY = 'tadori:sidebar-w';
 const SIDEBAR_MIN = 180;
@@ -146,7 +156,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
     const refs = buildTurn(q);
     scrollBottom();
-    refs.answerText.textContent = '検索中…';
+    refs.answerText.replaceChildren(thinkingEl('メールを検索中'));
 
     abort?.abort();
     abort = new AbortController();
@@ -158,6 +168,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         refs.answerText.textContent = '該当するメールが見つかりませんでした。';
         return;
       }
+      refs.answerText.replaceChildren(thinkingEl('回答を生成中'));
 
       // RAG には本文をプレーンテキストで渡す (HTML はタグを除去)。
       const sources: RagSource[] = hits.map((h, i) => ({
@@ -165,12 +176,13 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         body: h.isHtml ? htmlToText(h.body) : h.body,
       }));
 
-      refs.answerText.textContent = '';
       const t0 = performance.now();
 
       let full = '';
+      let firstDelta = true;
       await generateAnswer(q, sources, s, delta => {
         full += delta;
+        if (firstDelta) { refs.answerText.textContent = ''; firstDelta = false; } // 「生成中」を消す
         refs.answerText.textContent = full; // ストリーム中はプレーン (タイプ感)
         scrollBottom();
       }, abort.signal);
@@ -179,8 +191,16 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       finalizeTurn(refs, full, hits, ms, s.relayBaseUrl);
 
       // 履歴へ保存 (MailHit は SavedHit と同形)。
-      appendTurn(currentId, { q, answer: full, hits: hits as SavedHit[], ms });
+      const saved = appendTurn(currentId, { q, answer: full, hits: hits as SavedHit[], ms });
       refreshList();
+
+      // 新規セッションの最初の質問はタイトルを AI 要約に置き換える。
+      if (saved.turns.length === 1) {
+        const sid = currentId;
+        void summarizeTitle(q, s).then(title => {
+          if (title) { setTitle(sid, title); refreshList(); }
+        }).catch(() => { /* 失敗時は既定タイトルのまま */ });
+      }
 
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
@@ -193,11 +213,12 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   }
 
   function appendSources(container: HTMLElement, hits: SavedHit[], relayBaseUrl: string): void {
-    const hdrEl  = el('div', { class: 'tdr-sources-h' }, [
+    // 既定は折りたたみ (collapsed)。ヘッダクリックで開閉。
+    const hdrEl  = el('div', { class: 'tdr-sources-h collapsed' }, [
       el('span', { html: icons.chevron(14) }),
       el('span', {}, [`参照メール (${hits.length})`]),
     ]);
-    const listEl = el('div', { class: 'tdr-sources' });
+    const listEl = el('div', { class: 'tdr-sources collapsed' });
 
     hdrEl.addEventListener('click', () => {
       hdrEl.classList.toggle('collapsed');

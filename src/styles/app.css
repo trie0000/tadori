@@ -76,6 +76,11 @@
   color:var(--accent-strong);font-family:var(--font-mono);font-size:var(--fs-base);display:flex;align-items:center;justify-content:center;}
 #tadori-root .tdr-a-body{flex:1;min-width:0;}
 #tadori-root .tdr-answer{font-size:var(--fs-base);color:var(--ink);line-height:1.85;}
+#tadori-root .tdr-thinking{display:inline-flex;align-items:center;color:var(--ink-3);font-size:var(--fs-base);}
+#tadori-root .tdr-thinking .tdr-dot{display:inline-block;width:4px;height:4px;margin-left:4px;border-radius:50%;background:var(--accent-strong);animation:tdr-bounce 1.2s infinite ease-in-out;}
+#tadori-root .tdr-thinking .tdr-dot:nth-of-type(2){animation-delay:.18s;}
+#tadori-root .tdr-thinking .tdr-dot:nth-of-type(3){animation-delay:.36s;}
+@keyframes tdr-bounce{0%,80%,100%{opacity:.25;transform:translateY(0);}40%{opacity:1;transform:translateY(-2px);}}
 /* Markdown レンダリング (AI 回答) */
 #tadori-root .tdr-answer p{margin:0 0 var(--s-4);}
 #tadori-root .tdr-answer p:last-child{margin-bottom:0;}
