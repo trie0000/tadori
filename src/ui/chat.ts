@@ -4,7 +4,7 @@
 import { el } from '../lib/dom';
 import { icons } from './icons';
 import { toast } from './toast';
-import { searchMails } from '../search/index';
+import { searchVectors } from '../search/vectorSearch';
 import { generateAnswer, type RagSource } from '../rag/client';
 import { loadSettings } from '../api/aiSettings';
 
@@ -55,7 +55,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const s = loadSettings();
 
     try {
-      const hits = await searchMails(q, s, siteUrl, 5);
+      const hits = await searchVectors(q, s, siteUrl, 5);
       if (hits.length === 0) {
         answerText.textContent = '該当するメールが見つかりませんでした。';
         return;

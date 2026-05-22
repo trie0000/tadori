@@ -160,6 +160,23 @@ window.fetch = async (url, opts) => {
     return jsonResponse({ ok: true, count: mails.length, mails });
   }
 
+  // ベクトルDB セグメント (新方式): manifest と seg-*.json を返す
+  if (u.includes('GetFileByServerRelativeUrl')) {
+    if (u.includes('manifest.json')) {
+      return jsonResponse({ version: 1, generation: 1, sealed: ['seg-00001'], open: null, updatedAt: new Date().toISOString() });
+    }
+    if (u.includes('seg-00001')) {
+      const items = await buildListItems();
+      const records = items.map((m, i) => ({
+        seq: i + 1, op: 'upsert', messageId: '<' + m.Id + '@example>',
+        subject: m.Title, from: m.From, to: ['ml@example.co.jp'], cc: [], date: m.Created, body: m.Body,
+        emb: m.embedding,
+      }));
+      return new Response(JSON.stringify({ id: 'seg-00001', generation: 1, records }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('', { status: 404 });
+  }
+
   // SharePoint List 取得 → 常にモック
   if (u.includes('/_api/web/lists')) {
     try {
