@@ -121,11 +121,13 @@ if (watch || serve) {
       `function SP(){try{var c=w._spPageContextInfo;if(c&&c.webServerRelativeUrl)return c.webServerRelativeUrl.replace(/\\/$/,'')+${JSON.stringify(libPath)};}catch(e){}return '';}` +
       `var sp=SP(),dev='';` +
       `try{if(w.localStorage&&localStorage.getItem('tadori.dev.bundle-source')==='local')dev=(localStorage.getItem('tadori.dev.local-base')||'http://127.0.0.1:18080/tadori').replace(/\\/+$/,'');}catch(e){}` +
-      `var primary=dev||${overrideBase}||sp;var fb=(primary!==sp&&sp)?sp:'';` +
-      `function inject(base,ver){var o=d.getElementById('tadori-script');if(o)o.remove();var s=d.createElement('script');s.id='tadori-script';s.src=base+'/tadori.bundle.js?v='+encodeURIComponent(ver);s.onerror=function(){if(fb){var x=fb;fb='';go(x);}};d.body.appendChild(s);}` +
+      `var primary=dev||${overrideBase}||sp;var fb=(primary!==sp&&sp)?sp:'';var isLocal=!!dev;` +
+      // ローカル参照を明示している場合、失敗したらサイレントに SP へ落とさず警告を出す。
+      `function fail(base,why){var msg='[Tadori] ローカルバンドル読み込み失敗: '+base+(why?' ('+why+')':'')+'\\nrelay 起動と CORS / PNA を確認してください。';if(isLocal){alert(msg);console.error(msg);}else{console.warn(msg);}}` +
+      `function inject(base,ver){var o=d.getElementById('tadori-script');if(o)o.remove();var s=d.createElement('script');s.id='tadori-script';s.src=base+'/tadori.bundle.js?v='+encodeURIComponent(ver);s.onerror=function(){fail(base,'script load error');if(isLocal)return;if(fb){var x=fb;fb='';go(x);}};d.body.appendChild(s);}` +
       // credentials は同一オリジンのみ送る (SP は same-origin で Cookie 必要 / ローカル relay
       // はクロスオリジンで Allow-Origin:* なので credentials:'include' だと CORS で拒否される)。
-      `function go(base){fetch(base+'/version.txt?t='+Date.now(),{credentials:'same-origin'}).then(function(r){if(!r.ok)throw 0;return r.text();}).then(function(t){inject(base,(t||'').trim()||String(Date.now()));}).catch(function(){if(fb){var x=fb;fb='';go(x);}else{inject(base,String(Date.now()));}});}` +
+      `function go(base){fetch(base+'/version.txt?t='+Date.now(),{credentials:'same-origin'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}).then(function(t){inject(base,(t||'').trim()||String(Date.now()));}).catch(function(e){fail(base,e&&e.message||'fetch error');if(isLocal)return;if(fb){var x=fb;fb='';go(x);}else{inject(base,String(Date.now()));}});}` +
       `go(primary);})();`;
 
     fs.writeFileSync('dist/tadori.loader.js', loader);
