@@ -64,6 +64,9 @@
 #tadori-root .tdr-divider::after{content:"";position:absolute;inset:0 2px;background:var(--line);transition:background .12s;}
 #tadori-root .tdr-divider:hover::after,#tadori-root .tdr-divider.is-dragging::after{background:var(--accent-strong);}
 
+#tadori-root .tdr-progress{margin-top:var(--s-4);height:6px;background:var(--paper-3);border-radius:999px;overflow:hidden;}
+#tadori-root .tdr-progress-fill{height:100%;width:0;background:var(--accent);border-radius:999px;transition:width .2s ease;}
+
 #tadori-root .tdr-thread{flex:1;min-height:0;overflow:auto;padding:var(--gutter) var(--gutter) var(--s-7);}
 #tadori-root .tdr-turn{max-width:var(--thread-w);margin:0 auto var(--s-9);}
 #tadori-root .tdr-q{margin-left:auto;max-width:80%;width:fit-content;background:var(--accent-soft);

@@ -102,6 +102,9 @@ export async function ingestToSegments(
   const inflight = new Map<number, Promise<Float32Array[]>>();
   for (let i = 0; i < Math.min(concurrency, batches.length); i++) inflight.set(i, embedOf(batches[i]));
 
+  let embedded = 0;
+  onProgress?.('embed', 0, fresh.length);
+
   for (let bi = 0; bi < batches.length; bi++) {
     if (signal?.aborted) { cancelled = true; break; }
     const part = batches[bi];
@@ -114,6 +117,8 @@ export async function ingestToSegments(
       throw e;
     }
     inflight.delete(bi);
+    embedded += part.length;
+    onProgress?.('embed', embedded, fresh.length);
     const next = bi + concurrency;
     if (next < batches.length && !signal?.aborted) inflight.set(next, embedOf(batches[next]));
 

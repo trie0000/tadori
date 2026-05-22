@@ -245,7 +245,12 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
   pane.appendChild(grid);
 
   const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);margin-top:var(--s-3)' }, ['']);
+  const barFill = el('div', { class: 'tdr-progress-fill' });
+  const bar = el('div', { class: 'tdr-progress', style: 'display:none' }, [barFill]);
   const btn = el('button', { class: 'tdr-btn tdr-btn--primary', style: 'margin-top:var(--s-4)' }, ['Outlook から取り込む']);
+
+  function showBar(pct: number): void { bar.style.display = ''; barFill.style.width = `${pct}%`; }
+  function hideBar(): void { bar.style.display = 'none'; barFill.style.width = '0%'; }
 
   const RUN_LABEL = 'Outlook から取り込む';
   let ac: AbortController | null = null;
@@ -265,6 +270,7 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
     const signal = ac.signal;
     btn.textContent = '停止';
     status.textContent = 'Outlook を検索中…';
+    hideBar();
     void (async () => {
       try {
         // ① まず対象件数を取得して提示
@@ -279,11 +285,18 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
           status.textContent = `キャンセル (対象 ${mails.length} 件)`;
           return;
         }
-        // ② 埋め込み → 投入 (進捗表示・停止可)
+        // ② 埋め込み → 投入 (進捗バー + 件数。埋め込みと保存を 1 本のバーで単調増加)。
+        let embedded = 0, saved = 0;
         const r = await ingestToSegments(toIngestMails(mails), draft, siteUrl, (phase, done, total) => {
-          const label = phase === 'sync' ? '準備中' : '取り込み中';
-          status.textContent = total ? `${label}… ${done}/${total} (対象 ${mails.length} 件)` : `${label}…`;
+          if (phase === 'sync') { status.textContent = '準備中…'; return; }
+          if (phase === 'embed') embedded = done;
+          if (phase === 'upload') saved = done;
+          const units = (total || mails.length) * 2 || 1;
+          const pct = Math.min(100, Math.round((embedded + saved) / units * 100));
+          showBar(pct);
+          status.textContent = `埋め込み ${embedded}/${total} ・ 保存 ${saved}/${total} 件 (${pct}%)`;
         }, signal);
+        hideBar();
         const dup = r.skipped ? ` / 重複スキップ ${r.skipped} 件` : '';
         if (r.cancelled) {
           status.textContent = `停止しました: 保存済み 新規 ${r.added} 件 (セグメント ${r.segments})${dup}。再実行で続きから取り込めます。`;
@@ -306,11 +319,12 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       } finally {
         ac = null;
         btn.textContent = RUN_LABEL;
+        hideBar();
       }
     })();
   });
 
-  pane.append(btn, status);
+  pane.append(btn, bar, status);
 }
 
 // ─── 表示 ─────────────────────────────────────────────────────────────────────
