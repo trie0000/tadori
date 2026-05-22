@@ -1,0 +1,17 @@
+{
+  "name": "tadori",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "ML メール検索ツール — SharePoint 上で動くクライアントサイドベクトル検索 (bookmarklet)",
+  "scripts": {
+    "dev": "node build.js --watch --serve",
+    "build": "node build.js",
+    "build:prod": "node build.js --prod",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}
