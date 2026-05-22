@@ -7,10 +7,14 @@
 export interface TadoriConfig {
   /** 中継サーバの listen URL (scripts/tadori-ai-relay.ps1)。 */
   relayBaseUrl: string;
-  /** Azure OpenAI のデプロイ名 (モデル名と一致しない場合あり)。 */
+  /** 埋め込み(検索)用 Azure OpenAI デプロイ名 (モデル名と一致しない場合あり)。 */
   embeddingDeployment: string;
+  /** RAG 回答合成用のチャットモデルのデプロイ名。 */
+  chatDeployment: string;
   /** Azure OpenAI API バージョン。 */
   apiVersion: string;
+  /** RAG で回答に渡す参照メールの最大件数 (cosine 上位 K)。 */
+  ragTopK: number;
   /** Matryoshka 短縮の次元数。ADR-004 で 256。 */
   dimensions: number;
   /** ベクトルを格納する SharePoint List の表示名。 */
@@ -26,8 +30,10 @@ export interface TadoriConfig {
 export const DEFAULT_CONFIG: TadoriConfig = {
   relayBaseUrl: 'http://localhost:18080',
   embeddingDeployment: 'text-embedding-3-small',
+  chatDeployment: 'gpt-4o-mini',
   apiVersion: '2024-02-01',
   dimensions: 256,
+  ragTopK: 5,
   listTitle: '受信メールリスト',
   ingestIntervalMs: 30_000,
   claimTimeoutMs: 10 * 60_000,

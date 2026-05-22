@@ -49,16 +49,33 @@ body{margin:0;background:var(--paper-2,#f3f1ea);}
 .tdr-q{margin-left:auto;max-width:80%;width:fit-content;background:var(--accent-soft);
   color:var(--ink);padding:var(--s-4) var(--s-5);border-radius:var(--r-4) var(--r-4) var(--r-1) var(--r-4);
   font-size:var(--fs-base);}
+/* AI 回答ブロック */
+.tdr-a{display:flex;gap:var(--s-4);margin-top:var(--s-6);}
+.tdr-a-avatar{flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);
+  color:var(--accent-strong);font-family:var(--font-mono);font-size:var(--fs-base);
+  display:flex;align-items:center;justify-content:center;}
+.tdr-a-body{flex:1;min-width:0;}
+.tdr-answer{font-size:var(--fs-base);color:var(--ink);line-height:1.85;}
+.tdr-answer .cite{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-strong);
+  background:var(--accent-soft);border-radius:var(--r-1);padding:0 4px;margin:0 1px;cursor:pointer;vertical-align:1px;}
 /* 回答メタ行 */
-.tdr-a-meta{display:flex;align-items:center;gap:var(--s-4);margin:var(--s-5) 0 var(--s-3);
+.tdr-a-meta{display:flex;align-items:center;gap:var(--s-4);margin:var(--s-4) 0 var(--s-3);
   font-size:var(--fs-sm);color:var(--ink-3);}
 .tdr-a-meta .mono{font-family:var(--font-mono);}
-/* 結果カード */
+/* 参照メールの見出し */
+.tdr-sources-h{display:flex;align-items:center;gap:var(--s-3);margin:var(--s-6) 0 var(--s-3);
+  font-size:var(--fs-sm);color:var(--ink-3);cursor:pointer;}
+.tdr-sources-h svg{transition:transform .15s;}
+.tdr-sources-h.collapsed svg{transform:rotate(-90deg);}
+.tdr-sources.collapsed{display:none;}
+/* 結果カード (参照メール) */
+.tdr-hit-num{flex:0 0 auto;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-strong);
+  background:var(--accent-soft);width:20px;height:20px;border-radius:var(--r-1);display:inline-flex;align-items:center;justify-content:center;}
 .tdr-hit{padding:var(--s-5);border:1px solid var(--line);border-radius:var(--r-3);
   margin-bottom:var(--s-3);cursor:pointer;background:var(--paper);}
 .tdr-hit:hover{background:var(--paper-2);border-color:var(--line-strong);}
 .tdr-hit.is-open{background:var(--paper-2);border-color:var(--line-strong);}
-.tdr-hit-head{display:flex;align-items:baseline;gap:var(--s-4);}
+.tdr-hit-head{display:flex;align-items:center;gap:var(--s-3);}
 .tdr-hit-subject{font-size:var(--fs-base);font-weight:600;color:var(--ink);flex:1;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tdr-hit-score{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-strong);
@@ -170,8 +187,10 @@ svg{display:block;}
       <div class="tdr-fieldgrid">
         <label>中継サーバ URL</label><input class="tdr-input" value="http://localhost:18080">
         <p class="tdr-hint">tadori-ai-relay.ps1 の listen URL。</p>
-        <label>デプロイ名</label><input class="tdr-input" value="text-embedding-3-small">
-        <p class="tdr-hint">Azure のデプロイ名（モデル名と異なる場合あり）。</p>
+        <label>埋め込みモデル</label><input class="tdr-input" value="text-embedding-3-small">
+        <p class="tdr-hint">検索用。Azure のデプロイ名（モデル名と異なる場合あり）。</p>
+        <label>回答モデル</label><input class="tdr-input" value="gpt-4o-mini">
+        <p class="tdr-hint">RAG 回答合成用のチャットモデル（デプロイ名）。中継経由で利用。</p>
         <label>API キー</label><input class="tdr-input" type="password" value="************">
         <p class="tdr-hint">localStorage に保存。中継経由で Azure にのみ送信。</p>
         <label class="top">対象 ML アドレス</label>
@@ -225,16 +244,22 @@ const CORPUS = [
    body:"スマホ機種変更時は旧端末で MFA を解除してから新端末で再登録してください。旧端末が無い場合はヘルプデスクで本人確認のうえ解除します。"},
 ];
 
-// 過去のやり取り(履歴)を保持。新しい検索は push される。
+// 過去のやり取り(履歴)を保持。各ターン = 質問 + AI回答(出典付き) + 参照メール。
 const THREAD = [
-  { q:"VPN 接続できない 在宅", ms:38, hits:[
-      {i:0, score:0.91, terms:["VPN","在宅"]},
-      {i:1, score:0.78, terms:["VPN","在宅","RDP"]},
-      {i:2, score:0.64, terms:["VPN","接続"]},
+  { q:"在宅でVPNがよく切れるんだけど対処法は？",
+    answer:"在宅でVPNが断続的に切れる場合、まず<b>クライアント証明書の期限切れ</b>を確認してください。期限切れに伴う再認証ループが原因のことが多く、<b>証明書を再発行し、プロファイルを削除→再登録</b>することで解消した事例があります<cite data-n=\"1\">1</cite>。\n\nまた、接続後にRDPが遅い場合は<b>VPNのスプリットトンネル設定</b>や拠点側の帯域も確認すると良いです<cite data-n=\"2\">2</cite>。\n\nなお、11/20 深夜 1:00-3:00 はVPN装置のメンテナンスで接続できないので注意してください<cite data-n=\"3\">3</cite>。",
+    model:"gpt-4o-mini", ms:38, gen:1180,
+    hits:[
+      {i:0, score:0.91, terms:["VPN","在宅","証明書"]},
+      {i:1, score:0.78, terms:["VPN","RDP","スプリットトンネル"]},
+      {i:2, score:0.64, terms:["VPN","メンテ","接続"]},
   ]},
-  { q:"多要素認証 スマホ 変えた", ms:31, hits:[
-      {i:4, score:0.88, terms:["多要素認証","機種変更"]},
-      {i:3, score:0.59, terms:["多要素認証","パスワード"]},
+  { q:"スマホ機種変したらMFAが使えない",
+    answer:"多要素認証(MFA)は端末に紐づくため、<b>機種変更時は旧端末でMFAを解除してから新端末で再登録</b>する必要があります<cite data-n=\"1\">1</cite>。\n\nもし<b>旧端末が手元にない</b>場合は、ヘルプデスクで本人確認のうえ解除してもらえます<cite data-n=\"1\">1</cite>。再登録後はパスワードリセットのセルフサービスポータルも合わせて確認しておくと安心です<cite data-n=\"2\">2</cite>。",
+    model:"gpt-4o-mini", ms:31, gen:940,
+    hits:[
+      {i:4, score:0.88, terms:["多要素認証","MFA","機種変更","再登録"]},
+      {i:3, score:0.59, terms:["パスワード","多要素認証","ポータル"]},
   ]},
 ];
 
@@ -247,20 +272,30 @@ function snippet(body, terms){
   const line = body.split('\n')[0];
   return hl(line, terms);
 }
+const CHEVRON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>';
 function renderThread(){
   const root = document.getElementById('thread');
   root.innerHTML = THREAD.map((turn,ti)=>`
     <div class="tdr-turn">
       <div class="tdr-q">${turn.q}</div>
-      <div class="tdr-a-meta"><span class="mono">1,240</span> 件中 上位 <span class="mono">${turn.hits.length}</span> 件 · <span class="mono">${turn.ms}ms</span></div>
-      ${turn.hits.map(h=>{
-        const m=CORPUS[h.i];
-        return `<div class="tdr-hit" data-ti="${ti}" data-i="${h.i}" onclick="toggleHit(this)">
-          <div class="tdr-hit-head"><div class="tdr-hit-subject">${m.subject}</div><span class="tdr-hit-score">${h.score.toFixed(2)}</span></div>
-          <div class="tdr-hit-from">${m.from} · ${m.date}</div>
-          <div class="tdr-hit-snippet">${snippet(m.body,h.terms)}</div>
-        </div>`;
-      }).join('')}
+      <div class="tdr-a">
+        <div class="tdr-a-avatar">辿</div>
+        <div class="tdr-a-body">
+          <div class="tdr-answer">${(turn.answer||'').replace(/\n/g,'<br>').replace(/<cite data-n="(\d+)">(\d+)<\/cite>/g,'<span class="cite" onclick="jumpSource(this,$1)">$2</span>')}</div>
+          <div class="tdr-a-meta">回答モデル <span class="mono">${turn.model}</span> · <span class="mono">${turn.hits.length}</span> 件参照 · 検索 <span class="mono">${turn.ms}ms</span> · 生成 <span class="mono">${(turn.gen/1000).toFixed(1)}s</span></div>
+          <div class="tdr-sources-h" onclick="toggleSources(this)">${CHEVRON} 参照したメール（${turn.hits.length} 件）</div>
+          <div class="tdr-sources">
+          ${turn.hits.map((h,si)=>{
+            const m=CORPUS[h.i];
+            return `<div class="tdr-hit" data-i="${h.i}" onclick="toggleHit(this)">
+              <div class="tdr-hit-head"><span class="tdr-hit-num">${si+1}</span><div class="tdr-hit-subject">${m.subject}</div><span class="tdr-hit-score">${h.score.toFixed(2)}</span></div>
+              <div class="tdr-hit-from">${m.from} · ${m.date}</div>
+              <div class="tdr-hit-snippet">${snippet(m.body,h.terms)}</div>
+            </div>`;
+          }).join('')}
+          </div>
+        </div>
+      </div>
     </div>`).join('');
   root.scrollTop = root.scrollHeight;
 }
@@ -270,15 +305,25 @@ function toggleHit(el){
   if(!open){el.classList.add('is-open');const m=CORPUS[+el.dataset.i];
     const d=document.createElement('div');d.className='tdr-hit-detail';d.textContent=m.body;el.appendChild(d);}
 }
+function toggleSources(h){ h.classList.toggle('collapsed'); h.nextElementSibling.classList.toggle('collapsed'); }
+function jumpSource(cite,n){
+  const sources = cite.closest('.tdr-a-body').querySelector('.tdr-sources');
+  const h = sources.classList.contains('collapsed') ? (toggleSources(sources.previousElementSibling),sources) : sources;
+  const card = h.children[n-1];
+  if(card){ card.scrollIntoView({behavior:'smooth',block:'center'}); card.classList.add('is-open');
+    if(!card.querySelector('.tdr-hit-detail')){const d=document.createElement('div');d.className='tdr-hit-detail';d.textContent=CORPUS[+card.dataset.i].body;card.appendChild(d);} }
+}
 function send(){
   const ta = document.getElementById('composer');
   const q = ta.value.trim();
   if(!q) return;
-  // モックなのでコーパスから適当に上位を返す
+  // モック: 検索→上位を参照に、回答は固定文。実際は cosine 上位を LLM に渡して生成。
   const ms = 28 + Math.floor(Math.random()*30);
-  const hits = CORPUS.map((m,i)=>({i, score:+(0.55+Math.random()*0.4).toFixed(2), terms:q.split(/\s+/).filter(Boolean)}))
+  const terms = q.split(/\s+/).filter(Boolean);
+  const hits = CORPUS.map((m,i)=>({i, score:+(0.55+Math.random()*0.4).toFixed(2), terms}))
     .sort((a,b)=>b.score-a.score).slice(0,3);
-  THREAD.push({q, ms, hits});
+  const answer = "（デモ）検索した上位メールを根拠に回答を生成します。1件目の内容を要約すると次の通りです<cite data-n=\"1\">1</cite>。実装時は社内 Azure OpenAI のチャットモデルに上位メール本文を渡し、出典付きで回答を合成します。";
+  THREAD.push({q, answer, model:"gpt-4o-mini", ms, gen:900+Math.floor(Math.random()*600), hits});
   ta.value=''; autosize(ta); renderThread();
 }
 function clearThread(){ THREAD.length=0; renderThread(); }
