@@ -15,7 +15,8 @@ import {
 import { isDeveloperMode, setDeveloperMode } from '../utils/devMode';
 import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
-import { importFromOutlook } from '../outlook/import';
+import { fetchOutlookMails, toIngestMails } from '../outlook/import';
+import { ingestToSegments } from '../db/writer';
 
 type SectionId = 'ai' | 'ingest' | 'display' | 'diag' | 'dev' | 'about';
 
@@ -250,26 +251,35 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       max: Number(maxInp.value) || 1000,
     };
     btn.disabled = true;
-    status.textContent = 'Outlook から取得中…';
+    status.textContent = 'Outlook を検索中…';
     void (async () => {
       try {
-        const r = await importFromOutlook(draft, siteUrl, filter, (phase, done, total) => {
-          const label = phase === 'fetch' ? '取得中' : phase === 'embed' ? '埋め込み中' : '投入中';
-          status.textContent = total ? `${label}… ${done}/${total}` : `${label}…`;
-        });
-        if (r.fetched === 0) {
+        // ① まず対象件数を取得して提示
+        const mails = await fetchOutlookMails(draft.relayBaseUrl, filter);
+        if (mails.length === 0) {
           status.textContent = '該当するメールがありませんでした (条件・期間を確認)';
           toast(root, '該当メール 0 件', 'warn');
-        } else {
-          const dup = r.skipped ? ` / 重複スキップ ${r.skipped} 件` : '';
-          status.textContent = `取得 ${r.fetched} 件 / 新規 ${r.added} 件 (セグメント ${r.segments})${dup}`;
-          toast(root, `Outlook から ${r.added} 件取り込みました`, 'ok');
+          return;
         }
+        status.textContent = `対象 ${mails.length} 件が見つかりました`;
+        if (!confirm(`Outlook から ${mails.length} 件取り込みます。よろしいですか?`)) {
+          status.textContent = `キャンセル (対象 ${mails.length} 件)`;
+          return;
+        }
+        // ② 埋め込み → 投入 (進捗表示)
+        const r = await ingestToSegments(toIngestMails(mails), draft, siteUrl, (phase, done, total) => {
+          const label = phase === 'sync' ? '準備中' : phase === 'embed' ? '埋め込み中' : '投入中';
+          status.textContent = total ? `${label}… ${done}/${total} (対象 ${mails.length} 件)` : `${label}…`;
+        });
+        const dup = r.skipped ? ` / 重複スキップ ${r.skipped} 件` : '';
+        status.textContent = `完了: 取得 ${mails.length} 件 / 新規 ${r.added} 件 (セグメント ${r.segments})${dup}`;
+        toast(root, `Outlook から ${r.added} 件取り込みました`, 'ok');
       } catch (e) {
         status.textContent = '失敗';
         toast(root, `インポート失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      } finally {
+        btn.disabled = false;
       }
-      btn.disabled = false;
     })();
   });
 

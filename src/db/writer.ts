@@ -60,10 +60,17 @@ export async function ingestToSegments(
   });
   if (fresh.length === 0) return { added: 0, skipped: mails.length, segments: 0 };
 
-  // 埋め込み (失敗したら書き込まない: ベクトル無しレコードは検索対象外で無意味)
+  // 埋め込み (失敗したら書き込まない: ベクトル無しレコードは検索対象外で無意味)。
+  // バッチで分割して進捗を出す & 1回の巨大リクエストを避ける。
   const bodies = fresh.map(m => cleanBody(m.body));
-  onProgress?.('embed', 0, fresh.length);
-  const vecs = await embedDocsFor(bodies, s);
+  const EMBED_BATCH = 64;
+  const vecs: Float32Array[] = [];
+  onProgress?.('embed', 0, bodies.length);
+  for (let off = 0; off < bodies.length; off += EMBED_BATCH) {
+    const part = await embedDocsFor(bodies.slice(off, off + EMBED_BATCH), s);
+    for (const v of part) vecs.push(v);
+    onProgress?.('embed', Math.min(off + EMBED_BATCH, bodies.length), bodies.length);
+  }
 
   const manifest = await eng.store.ensureManifest();
   let seq = manifest.maxSeq;
