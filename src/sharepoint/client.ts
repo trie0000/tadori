@@ -283,6 +283,23 @@ export class SharePointClient {
     }
   }
 
+  /** ファイルを削除 (リセット用)。失敗は throw。 */
+  async deleteFile(serverRelativeUrl: string): Promise<void> {
+    const digest = await this.getFormDigest();
+    const res = await fetch(
+      `${this.siteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(serverRelativeUrl)}')`,
+      {
+        method: 'POST',
+        headers: await this.headers({ 'X-RequestDigest': digest, 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*' }),
+        credentials: 'include',
+      },
+    );
+    if (!res.ok && res.status !== 404) {
+      const b = await res.text().catch(() => '');
+      throw new Error(`deleteFile HTTP ${res.status} ${b.slice(0, 200)}`);
+    }
+  }
+
   /** フォルダ直下のファイル名一覧。フォルダが無ければ空配列。 */
   async listFolderFileNames(folderServerRelativeUrl: string): Promise<string[]> {
     const res = await fetch(

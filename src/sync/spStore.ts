@@ -49,6 +49,17 @@ export class SpVectorStore {
     return names.filter(n => n.startsWith('seg-') && n.endsWith('.json')).map(n => n.slice(0, -5));
   }
 
+  /** SharePoint 上の Tadori フォルダ配下の manifest と全セグメントを削除。
+   *  「取り込みメールの全削除」用。フォルダ自体は残す (次回取り込みで再利用)。 */
+  async deleteAll(): Promise<void> {
+    const names = await this.sp.listFolderFileNames(this.folder);
+    for (const name of names) {
+      if (name === MANIFEST_NAME || (name.startsWith('seg-') && name.endsWith('.json'))) {
+        await this.sp.deleteFile(`${this.folder}/${name}`).catch(() => { /* best-effort */ });
+      }
+    }
+  }
+
   /** 初回・manifest 不在時は空 manifest を作って配置する。 */
   async ensureManifest(): Promise<Manifest> {
     const m = await this.readManifest();

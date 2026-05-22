@@ -67,4 +67,11 @@ export class SegmentCache {
     const db = await this.db();
     await tx(db, STORE_META, 'readwrite', s => s.put(serializeManifest(m), 'manifest'));
   }
+
+  /** すべてのセグメントと manifest を消す (取り込み済みメールの全削除用)。 */
+  async clearAll(): Promise<void> {
+    const db = await this.db();
+    await tx(db, STORE_SEG, 'readwrite', s => s.clear());
+    await tx(db, STORE_META, 'readwrite', s => s.clear());
+  }
 }

@@ -192,6 +192,9 @@
 #tadori-root .tdr-hub-navitem{display:block;padding:8px 16px;border-left:3px solid transparent;font-size:var(--fs-sm);color:var(--ink-3);cursor:pointer;}
 #tadori-root .tdr-hub-navitem:hover{background:var(--paper-2-strong);color:var(--ink);}
 #tadori-root .tdr-hub-navitem.is-active{background:var(--accent-soft);color:var(--ink);border-left-color:var(--accent);font-weight:600;}
+#tadori-root .tdr-hub-group.is-danger{color:var(--danger);}
+#tadori-root .tdr-hub-navitem.is-danger{color:var(--danger);}
+#tadori-root .tdr-hub-navitem.is-danger.is-active{background:var(--danger-soft);color:var(--danger);border-left-color:var(--danger);}
 #tadori-root .tdr-hub-pane{flex:1;min-width:0;padding:var(--s-5) var(--s-6);overflow:auto;background:var(--paper);}
 /* 歯車ドロップダウンメニュー (Spira と同じ) */
 #tadori-root .tdr-menu{background:var(--paper);border:1px solid var(--line-strong);border-radius:var(--r-2);box-shadow:var(--shadow-modal);padding:var(--s-1);min-width:180px;}

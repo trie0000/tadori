@@ -4,7 +4,7 @@
 
 import { el } from '../lib/dom';
 import { icons } from './icons';
-import { openModal } from './modal';
+import { openModal, confirmModal } from './modal';
 import { toast } from './toast';
 import {
   loadSettings, saveSettings, parseAddressList,
@@ -21,10 +21,10 @@ import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { ingestToSegments } from '../db/writer';
-import { getEngine } from '../db/engine';
+import { getEngine, wipeImportedMails } from '../db/engine';
 import { fetchMonthlyTotals, currentUser } from '../usage/tracker';
 
-type SectionId = 'ai' | 'search' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev';
+type SectionId = 'ai' | 'search' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'resetMail' | 'resetAll';
 
 // メニュー構成は固定 (Spira と同じグループ流儀)。むやみに名前を変えないこと。
 const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[] = [
@@ -41,6 +41,10 @@ const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[]
   { title: '運用', items: [
     { id: 'dev', label: '開発者モード' },
   ] },
+  { title: '危険ゾーン', items: [
+    { id: 'resetMail', label: '取り込みメールを全削除' },
+    { id: 'resetAll',  label: 'ツール全体をリセット' },
+  ] },
 ];
 
 export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
@@ -51,9 +55,10 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
 
   const navBtns = new Map<SectionId, HTMLElement>();
   for (const g of NAV_GROUPS) {
-    nav.appendChild(el('div', { class: 'tdr-hub-group' }, [g.title]));
+    const danger = g.title === '危険ゾーン';
+    nav.appendChild(el('div', { class: 'tdr-hub-group' + (danger ? ' is-danger' : '') }, [g.title]));
     for (const item of g.items) {
-      const btn = el('div', { class: 'tdr-hub-navitem' }, [item.label]);
+      const btn = el('div', { class: 'tdr-hub-navitem' + (danger ? ' is-danger' : '') }, [item.label]);
       btn.addEventListener('click', () => activate(item.id));
       navBtns.set(item.id, btn);
       nav.appendChild(btn);
@@ -71,6 +76,8 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
       case 'diag':    buildDiagPane(pane, draft, root, siteUrl); break;
       case 'usage':   buildUsagePane(pane, root); break;
       case 'dev':     buildDevPane(pane, draft, root, siteUrl); break;
+      case 'resetMail': buildResetMailPane(pane, root, siteUrl); break;
+      case 'resetAll':  buildResetAllPane(pane, root, siteUrl); break;
     }
   }
 
@@ -600,5 +607,80 @@ function buildBundleSourcePane(pane: HTMLElement, root: HTMLElement): void {
     dirStatus,
   );
   pane.appendChild(grid);
+}
+
+// ─── 危険ゾーン ─────────────────────────────────────────────────────────────────
+
+/** ペイン共通のデンジャーカード (Spira と同じ作法: 説明 + danger ボタン)。 */
+function dangerCard(opts: {
+  pane: HTMLElement; title: string; warning: string; buttonLabel: string; onRun: () => void;
+}): void {
+  paneHead(opts.pane, opts.title, '');
+  const card = el('div', {
+    style: 'border:1px solid var(--danger);border-radius:var(--r-3);padding:var(--s-5) var(--s-7);background:var(--danger-soft);margin-top:var(--s-3);',
+  }, [
+    el('p', { style: 'margin:0 0 var(--s-4);color:var(--danger);font-weight:600;white-space:pre-line;' }, ['⚠ ' + opts.warning]),
+  ]);
+  const btn = el('button', { class: 'tdr-btn tdr-btn--danger' }, [opts.buttonLabel]);
+  btn.addEventListener('click', () => opts.onRun());
+  card.appendChild(btn);
+  opts.pane.appendChild(card);
+}
+
+function buildResetMailPane(pane: HTMLElement, root: HTMLElement, siteUrl: string): void {
+  dangerCard({
+    pane,
+    title: '取り込みメールを全削除',
+    warning:
+      'ベクトルDB に登録された全メールを削除します (ブラウザのキャッシュと SharePoint 上の Tadori フォルダ配下の manifest.json / seg-*.json)。\n'
+      + 'チャット履歴・設定は残ります。再取り込みすると最新の relay (conversationId 付き) で再構築されます。',
+    buttonLabel: '取り込みメールを全削除する',
+    onRun: () => {
+      confirmModal({
+        root, title: '取り込みメールを全削除', primaryLabel: '削除する', primaryVariant: 'danger',
+        message: 'ベクトルDB の全メール (manifest + 全セグメント) を削除します。元に戻せません。よろしいですか?',
+        onConfirm: async () => {
+          try { await wipeImportedMails(siteUrl); toast(root, '取り込みメールを全削除しました。再取り込みしてください。', 'ok'); }
+          catch (e) { toast(root, `削除失敗: ${e instanceof Error ? e.message : String(e)}`, 'error'); }
+        },
+      });
+    },
+  });
+}
+
+function buildResetAllPane(pane: HTMLElement, root: HTMLElement, siteUrl: string): void {
+  dangerCard({
+    pane,
+    title: 'ツール全体をリセット',
+    warning:
+      '次のすべてを削除します:\n'
+      + ' • 取り込みメール (ベクトルDB) — ローカル + SharePoint\n'
+      + ' • Tadori と Spira の AI 設定 (localStorage)\n'
+      + ' • チャット履歴・利用料の累計・サイドバー幅などのローカル状態\n'
+      + 'リセット後はページが再読み込みされ、初期状態になります。元に戻せません。',
+    buttonLabel: 'ツール全体をリセットする',
+    onRun: () => {
+      confirmModal({
+        root, title: 'ツール全体をリセット', primaryLabel: 'リセットする', primaryVariant: 'danger',
+        message: '本当に Tadori を完全リセットしますか? 設定・履歴・取り込みデータがすべて消えます。',
+        onConfirm: async () => {
+          try {
+            await wipeImportedMails(siteUrl);
+            // localStorage の Tadori / 共有 AI 設定キーを掃除 (他アプリ Spira 用キーも消える点に注意)。
+            try {
+              const keys: string[] = [];
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i); if (!k) continue;
+                if (k.startsWith('tadori') || k.startsWith('tadori.') || k.startsWith('spira:ai:')) keys.push(k);
+              }
+              for (const k of keys) localStorage.removeItem(k);
+            } catch { /* quota / noop */ }
+            toast(root, 'リセットしました。再読み込みします…', 'ok');
+            setTimeout(() => location.reload(), 800);
+          } catch (e) { toast(root, `リセット失敗: ${e instanceof Error ? e.message : String(e)}`, 'error'); }
+        },
+      });
+    },
+  });
 }
 

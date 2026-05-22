@@ -28,3 +28,12 @@ export async function getEngine(siteUrl: string): Promise<Engine> {
   await sync.sync();
   return engine;
 }
+
+/** 取り込み済みメールを全削除 (ローカルDB + IndexedDB キャッシュ + SharePoint ファイル)。 */
+export async function wipeImportedMails(siteUrl: string): Promise<void> {
+  const eng = await getEngine(siteUrl);
+  eng.db.clear();
+  await eng.cache.clearAll();
+  await eng.store.deleteAll();
+  engine = null; // 次回 getEngine で空状態から再同期
+}
