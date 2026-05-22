@@ -15,7 +15,7 @@ import {
 import { isDeveloperMode, setDeveloperMode } from '../utils/devMode';
 import {
   getBundleSource, setBundleSource, getLocalBase, setLocalBase,
-  getRelayBundleDir, setRelayBundleDir, DEFAULT_LOCAL_BASE, fetchLatestBuildId, type BundleSource,
+  getRelayBundleDir, setRelayBundleDir, DEFAULT_LOCAL_BASE, type BundleSource,
 } from '../utils/bundleSource';
 import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
@@ -79,42 +79,10 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
     title: '設定',
     large: true,
     body:   el('div', { class: 'tdr-hub' }, [nav, pane]),
-    footer: el('div', { class: 'tdr-modal-footer' }, [buildVersionUpdate(root), saveBtn]),
+    footer: el('div', { class: 'tdr-modal-footer' }, [saveBtn]),
   });
 
   activate('ai');
-}
-
-// 歯車を開くと常に見えるビルドバージョン (クリックでコピー) + 更新確認ボタン。
-function buildVersionUpdate(root: HTMLElement): HTMLElement {
-  const ver = el('button', {
-    class: 'tdr-build-label',
-    title: 'クリックでコピー',
-  }, [`build: ${__TADORI_BUILD_ID__}`]);
-  ver.addEventListener('click', () => {
-    void navigator.clipboard?.writeText(__TADORI_BUILD_ID__).then(() => {
-      const t = ver.textContent;
-      ver.textContent = '✓ コピーしました';
-      setTimeout(() => { ver.textContent = t; }, 1200);
-    }).catch(() => { /* noop */ });
-  });
-
-  const updBtn = el('button', { class: 'tdr-btn' }, ['更新を確認']);
-  updBtn.addEventListener('click', () => {
-    updBtn.disabled = true;
-    const orig = updBtn.textContent;
-    updBtn.textContent = '確認中…';
-    void (async () => {
-      const latest = await fetchLatestBuildId();
-      updBtn.textContent = orig;
-      updBtn.disabled = false;
-      if (!latest) { toast(root, '更新元に接続できませんでした', 'warn'); return; }
-      if (latest === __TADORI_BUILD_ID__) { toast(root, '最新です', 'ok'); return; }
-      toast(root, `新しいバージョンがあります (${latest})。リロードで更新されます。`, 'ok');
-    })();
-  });
-
-  return el('div', { class: 'tdr-footer-left' }, [ver, updBtn]);
 }
 
 // ─── 共通ヘルパ ───────────────────────────────────────────────────────────────
@@ -131,10 +99,10 @@ function mkRow(label: string, ctrl: HTMLElement, hint?: string): HTMLElement[] {
   return nodes;
 }
 
-/** ペイン共通の見出し (タイトル + 説明ボックス)。Spira の設定パネルと同じ構成。 */
+/** ペイン共通の見出し (タイトル + プレーンな説明文。枠は付けない)。 */
 function paneHead(pane: HTMLElement, title: string, desc?: string): void {
   pane.appendChild(el('p', { class: 'tdr-pane-title' }, [title]));
-  if (desc) pane.appendChild(el('div', { class: 'tdr-pane-desc' }, [desc]));
+  if (desc) pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-5)' }, [desc]));
 }
 
 function mkSelect(options: { value: string; label: string }[], current: string, onchange: (v: string) => void): HTMLSelectElement {
@@ -245,8 +213,8 @@ function buildIngestPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
 
 function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement, siteUrl: string): void {
   pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['Outlook からインポート']));
-  pane.appendChild(el('div', { class: 'tdr-pane-desc' }, [
-    'ローカル中継サーバ経由で Outlook の既存メールを読み込み、To/Cc 条件と受信期間で絞って List に取り込みます (中継サーバの起動が必要)。',
+  pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-4)' }, [
+    'ローカル中継サーバ経由で Outlook の既存メールを読み込み、To/Cc 条件と受信期間で絞って取り込みます (中継サーバの起動が必要)。',
   ]));
 
   const today = new Date();
@@ -455,62 +423,52 @@ function buildDevPane(
   buildBundleSourcePane(pane, root);
 }
 
-// 開発: バンドル読み込み元 (SharePoint / ローカル relay) の切替。Spira と同等。
+// 開発: バンドル読み込み元 (SharePoint / ローカル relay) の切替。変更は即保存・
+// 次回リロードで反映。
 function buildBundleSourcePane(pane: HTMLElement, root: HTMLElement): void {
   pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['バンドル読み込み元']));
-  pane.appendChild(el('div', { class: 'tdr-pane-desc' }, [
-    'Tadori 本体 (tadori.bundle.js) をどこから読むか。テスト時にローカル relay が配信する dist を読ませる用途。切替は次回リロードで反映 (ローダーは起動時に1度だけ参照先を決めるため)。',
+  pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-4)' }, [
+    'Tadori 本体をどこから読むか。テスト時にローカル relay の dist を読ませる用途。次回リロードで反映。',
   ]));
 
-  const cur = getBundleSource();
-  const radioSP = el('input', { type: 'radio', name: 'tdr-bundle-src', value: 'sharepoint' });
-  const radioLocal = el('input', { type: 'radio', name: 'tdr-bundle-src', value: 'local' });
-  (cur === 'local' ? radioLocal : radioSP).checked = true;
-  const baseInp = el('input', { class: 'tdr-input', type: 'text', value: getLocalBase(), placeholder: DEFAULT_LOCAL_BASE });
-  const dirInp = el('input', { class: 'tdr-input', type: 'text', placeholder: 'C:\\tools\\tadori\\dist (relay の配信フォルダ)' });
-  const dirStatus = el('p', { class: 'tdr-hint' }, ['relay に照会中…']);
+  const sel = el('select', { class: 'tdr-input' });
+  const optSP = el('option', { value: 'sharepoint' }, ['SharePoint (本番)']);
+  const optLocal = el('option', { value: 'local' }, ['ローカル relay (開発)']);
+  if (getBundleSource() === 'local') optLocal.setAttribute('selected', 'selected');
+  else optSP.setAttribute('selected', 'selected');
+  sel.append(optSP, optLocal);
+  sel.addEventListener('change', () => {
+    setBundleSource(sel.value as BundleSource);
+    toast(root, `読み込み元を ${sel.value === 'local' ? 'ローカル relay' : 'SharePoint'} に。リロードで反映`, 'ok');
+  });
 
+  const baseInp = mkInput(getLocalBase(), v => setLocalBase(v));
+  baseInp.placeholder = DEFAULT_LOCAL_BASE;
+
+  const dirInp = mkInput('', v => {
+    const dir = v.trim();
+    if (!dir) return;
+    void setRelayBundleDir(dir).then(r => {
+      if (r) dirStatus.textContent = `現在: ${r.dir}  ${r.hasBundle ? '✅ tadori.bundle.js あり' : '⚠ 無い'}`;
+      else toast(root, 'relay へのフォルダ設定に失敗 (relay 未起動?)', 'warn');
+    });
+  });
+  dirInp.placeholder = 'C:\\tools\\tadori\\dist';
+  const dirStatus = el('p', { class: 'tdr-hint' }, ['relay に照会中…']);
   void getRelayBundleDir().then(r => {
     if (!r) { dirStatus.textContent = '⚠ relay 未起動 / 応答なし'; return; }
     if (!dirInp.value) dirInp.value = r.dir;
     dirStatus.textContent = `現在: ${r.dir}  ${r.hasBundle ? '✅ tadori.bundle.js あり' : '⚠ tadori.bundle.js が無い'}`;
   });
 
-  const radioRow = (input: HTMLInputElement, label: string, hint: string) =>
-    el('label', { style: 'display:flex;align-items:flex-start;gap:var(--s-3);cursor:pointer;padding:var(--s-3);background:var(--paper-2);border-radius:var(--r-2);margin-bottom:var(--s-2)' }, [
-      input,
-      el('span', { style: 'font-size:var(--fs-sm)' }, [el('strong', {}, [label]), el('br'), el('span', { class: 'tdr-hint' }, [hint])]),
-    ]);
-
-  const grid = el('div', { class: 'tdr-fieldgrid', style: 'margin-top:var(--s-4)' });
+  const grid = el('div', { class: 'tdr-fieldgrid' });
   grid.append(
+    ...mkRow('読み込み元', sel),
     ...mkRow('ローカル base', baseInp, '例: http://127.0.0.1:18080/tadori'),
     el('label', { class: 'top' }, ['relay 配信フォルダ']),
     dirInp,
     dirStatus,
   );
-
-  const saveBtn = el('button', { class: 'tdr-btn', style: 'margin-top:var(--s-4)' }, ['保存 (次回リロードで反映)']);
-  saveBtn.addEventListener('click', () => {
-    void (async () => {
-      setBundleSource(radioLocal.checked ? 'local' : 'sharepoint');
-      setLocalBase(baseInp.value);
-      const dir = dirInp.value.trim();
-      if (dir) {
-        const r = await setRelayBundleDir(dir);
-        if (r) dirStatus.textContent = `現在: ${r.dir}  ${r.hasBundle ? '✅ あり' : '⚠ bundle 無し'}`;
-        else { toast(root, 'relay へのフォルダ設定に失敗 (relay 未起動?)', 'warn'); return; }
-      }
-      const src: BundleSource = radioLocal.checked ? 'local' : 'sharepoint';
-      toast(root, `読み込み元: ${src === 'local' ? 'ローカル relay' : 'SharePoint'}。リロードで反映`, 'ok');
-    })();
-  });
-
-  pane.append(
-    radioRow(radioSP, 'SharePoint (本番)', '実行サイトの ドキュメント/Tadori から読む'),
-    radioRow(radioLocal, 'ローカル relay (開発)', '下記 base から読む。relay が dist を配信'),
-    grid,
-    saveBtn,
-  );
+  pane.appendChild(grid);
 }
 
