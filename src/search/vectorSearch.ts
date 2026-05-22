@@ -4,7 +4,15 @@
 import { getEngine } from '../db/engine';
 import { embedQueryFor } from '../embeddings/router';
 import type { RuntimeSettings } from '../api/aiSettings';
-import type { MailHit } from './index';
+
+export interface MailHit {
+  messageId: string;
+  subject: string;
+  from: string;
+  date: string;
+  body: string;
+  score: number;
+}
 
 /** 手動再同期 (取り込み後など)。 */
 export async function resyncVectors(siteUrl: string): Promise<void> {
