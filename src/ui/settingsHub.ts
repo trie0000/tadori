@@ -24,24 +24,30 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
   const nav  = el('div', { class: 'tdr-hub-nav' });
   const pane = el('div', { class: 'tdr-hub-pane' });
 
-  const navItems: { id: SectionId; label: string; icon: string }[] = [
-    { id: 'ai',      label: 'AI 接続',  icon: icons.settings() },
-    { id: 'ingest',  label: '取り込み', icon: icons.activity() },
-    { id: 'display', label: '表示',     icon: icons.moon()     },
-    { id: 'diag',    label: '診断',     icon: icons.search()   },
-    { id: 'dev',     label: '開発者',   icon: icons.activity() },
-    { id: 'about',   label: 'About',    icon: icons.chevron()  },
+  const navGroups: { title: string; items: { id: SectionId; label: string }[] }[] = [
+    { title: '一般', items: [
+      { id: 'ai',      label: 'AI 接続' },
+      { id: 'ingest',  label: '取り込み' },
+      { id: 'display', label: '表示' },
+    ] },
+    { title: '詳細', items: [
+      { id: 'diag', label: '診断' },
+      { id: 'dev',  label: '開発者' },
+    ] },
+    { title: '情報', items: [
+      { id: 'about', label: 'About' },
+    ] },
   ];
 
   const navBtns = new Map<SectionId, HTMLElement>();
-  for (const item of navItems) {
-    const btn = el('div', { class: 'tdr-hub-navitem' }, [
-      el('span', { html: item.icon }),
-      el('span', {}, [item.label]),
-    ]);
-    btn.addEventListener('click', () => activate(item.id));
-    navBtns.set(item.id, btn);
-    nav.appendChild(btn);
+  for (const g of navGroups) {
+    nav.appendChild(el('div', { class: 'tdr-hub-group' }, [g.title]));
+    for (const item of g.items) {
+      const btn = el('div', { class: 'tdr-hub-navitem' }, [item.label]);
+      btn.addEventListener('click', () => activate(item.id));
+      navBtns.set(item.id, btn);
+      nav.appendChild(btn);
+    }
   }
 
   function activate(id: SectionId): void {
@@ -66,6 +72,7 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
   openModal({
     root,
     title: '設定',
+    large: true,
     body:   el('div', { class: 'tdr-hub' }, [nav, pane]),
     footer: el('div', { class: 'tdr-modal-footer' }, [saveBtn]),
   });
@@ -87,6 +94,12 @@ function mkRow(label: string, ctrl: HTMLElement, hint?: string): HTMLElement[] {
   return nodes;
 }
 
+/** ペイン共通の見出し (タイトル + 説明ボックス)。Spira の設定パネルと同じ構成。 */
+function paneHead(pane: HTMLElement, title: string, desc?: string): void {
+  pane.appendChild(el('p', { class: 'tdr-pane-title' }, [title]));
+  if (desc) pane.appendChild(el('div', { class: 'tdr-pane-desc' }, [desc]));
+}
+
 function mkSelect(options: { value: string; label: string }[], current: string, onchange: (v: string) => void): HTMLSelectElement {
   const sel = el('select', { class: 'tdr-input' }, options.map(o => {
     const opt = el('option', { value: o.value }, [o.label]);
@@ -100,7 +113,7 @@ function mkSelect(options: { value: string; label: string }[], current: string, 
 // ─── AI 接続 ──────────────────────────────────────────────────────────────────
 
 function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['AI 接続']));
+  paneHead(pane, 'AI 接続', '★ Spira と共有される設定です。どちらで変更しても両方のツールに反映されます。');
   const dev = isDeveloperMode();
 
   // dev OFF なのに claude が選ばれていたら corp に丸める
@@ -117,13 +130,9 @@ function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
     select.appendChild(optClaude);
   }
 
-  const provGrid = el('div', { class: 'tdr-fieldgrid' });
+  const provGrid = el('div', { class: 'tdr-fieldgrid', style: 'margin-bottom:var(--s-5)' });
   provGrid.append(...mkRow('プロバイダ', select, dev ? '開発者モードでは Claude を選べます' : undefined));
   pane.appendChild(provGrid);
-
-  pane.appendChild(el('p', { class: 'tdr-shared-note', style: 'margin:var(--s-5) 0' }, [
-    '★ Spira と共有される設定です。どちらで変更しても両方のツールに反映されます。',
-  ]));
 
   // ── corp ブロック (Spira と同じ deploy-prefix 方式) ──
   const corpModelOpts = CORP_AI_MODELS.map(m => ({ value: m.id, label: m.id }));
@@ -177,7 +186,7 @@ function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
 // ─── 取り込み ─────────────────────────────────────────────────────────────────
 
 function buildIngestPane(pane: HTMLElement, draft: RuntimeSettings): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['取り込み']));
+  paneHead(pane, '取り込み', '取り込み対象のメーリングリストと、ベクトルを格納する SharePoint List を設定します。');
 
   const grid = el('div', { class: 'tdr-fieldgrid' });
   const addrArea = el('textarea', { class: 'tdr-input', rows: '4' });
@@ -197,7 +206,7 @@ function buildIngestPane(pane: HTMLElement, draft: RuntimeSettings): void {
 // ─── 表示 ─────────────────────────────────────────────────────────────────────
 
 function buildDisplayPane(pane: HTMLElement, root: HTMLElement): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['表示']));
+  paneHead(pane, '表示', '外観の設定。テーマはこの端末にのみ保存されます。');
 
   const toggleBtn = el('button', { class: 'tdr-btn' }, [
     el('span', { html: icons.moon() }),
@@ -216,7 +225,7 @@ function buildDisplayPane(pane: HTMLElement, root: HTMLElement): void {
 // ─── 診断 ─────────────────────────────────────────────────────────────────────
 
 function buildDiagPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['診断']));
+  paneHead(pane, '診断', '現在の provider で埋め込み API に接続できるか確認します。');
 
   function mkDiagRow(label: string): { row: HTMLElement; set: (ok: boolean, text: string) => void } {
     const stat = el('span', { class: 'stat' }, ['—']);
@@ -259,7 +268,7 @@ function buildDevPane(
   root: HTMLElement,
   siteUrl: string,
 ): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['開発者']));
+  paneHead(pane, '開発者', '実験的機能 (Claude API 直接利用・テストデータ投入) を有効化します。通常運用では OFF のまま。');
 
   // 開発者モードトグル (即時保存)
   const checkbox = el('input', { type: 'checkbox' });
@@ -311,7 +320,7 @@ function buildDevPane(
 // ─── About ────────────────────────────────────────────────────────────────────
 
 function buildAboutPane(pane: HTMLElement): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title' }, ['About']));
+  paneHead(pane, 'About', 'バージョンとビルド情報。');
   const grid = el('div', { class: 'tdr-fieldgrid' });
   grid.append(
     el('label', {}, ['バージョン']),

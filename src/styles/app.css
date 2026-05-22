@@ -29,9 +29,10 @@
 
 #tadori-root .tdr-topbar{display:flex;align-items:center;gap:var(--s-4);height:var(--topbar-h);
   padding:0 var(--gutter);border-bottom:1px solid var(--line);background:var(--paper);flex:0 0 auto;}
-#tadori-root .tdr-brand{display:flex;align-items:center;gap:var(--s-3);font-size:var(--fs-lg);font-weight:600;}
-#tadori-root .tdr-brand .mark{font-family:var(--font-mono);color:var(--accent-strong);font-size:var(--fs-xl);}
-#tadori-root .tdr-brand .sub{font-size:var(--fs-xs);color:var(--ink-3);font-weight:400;}
+#tadori-root .tdr-brand{display:flex;align-items:baseline;gap:var(--s-3);min-width:0;overflow:hidden;}
+#tadori-root .tdr-brand .mark{font-family:var(--font-mono);color:var(--accent-strong);font-size:var(--fs-xl);font-weight:600;line-height:1;}
+#tadori-root .tdr-brand .name{font-size:var(--fs-lg);font-weight:600;color:var(--ink);line-height:1;}
+#tadori-root .tdr-brand .sub{font-size:var(--fs-xs);color:var(--ink-3);font-weight:400;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #tadori-root .tdr-spacer{flex:1;}
 
 #tadori-root .tdr-thread{flex:1;min-height:0;overflow:auto;padding:var(--gutter) var(--gutter) var(--s-7);}
@@ -91,18 +92,22 @@
 #tadori-root .tdr-backdrop{position:fixed;inset:0;z-index:2147483700;background:rgba(15,15,15,.45);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:var(--s-7);}
 #tadori-root .tdr-modal{background:var(--paper);border:1px solid var(--line-strong);border-radius:var(--r-3);box-shadow:var(--shadow-modal);width:100%;max-width:760px;max-height:calc(100vh - var(--s-10));display:flex;flex-direction:column;overflow:hidden;}
 #tadori-root .tdr-modal--sm{max-width:480px;}
+/* 設定ハブ用: 項目で大きさが変わらない固定サイズ (Spira の --xl 同等)。 */
+#tadori-root .tdr-modal--lg{max-width:none;width:min(900px, calc(100vw - var(--s-10)));height:min(660px, calc(100vh - var(--s-10)));min-width:640px;min-height:460px;resize:both;}
 #tadori-root .tdr-modal-header{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-7) var(--s-7) var(--s-5);}
 #tadori-root .tdr-modal-title{font-size:var(--fs-lg);font-weight:600;margin:0;}
 #tadori-root .tdr-modal-footer{display:flex;justify-content:flex-end;gap:var(--s-3);padding:var(--s-5) var(--s-7) var(--s-7);}
 
-/* 設定ハブ: 左ナビ + 右ペイン */
+/* 設定ハブ: 左ナビ + 右ペイン (Spira の設定ハブと同じ作り) */
 #tadori-root .tdr-hub{display:flex;flex:1;min-height:0;}
-#tadori-root .tdr-hub-nav{width:200px;flex:0 0 auto;border-right:1px solid var(--line);padding:var(--s-3);overflow:auto;}
-#tadori-root .tdr-hub-navitem{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-3) var(--s-4);border-radius:var(--r-2);font-size:var(--fs-md);color:var(--ink);cursor:pointer;}
-#tadori-root .tdr-hub-navitem:hover{background:var(--paper-2);}
-#tadori-root .tdr-hub-navitem.is-active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600;}
-#tadori-root .tdr-hub-pane{flex:1;min-width:0;padding:var(--s-7);overflow:auto;}
-#tadori-root .tdr-pane-title{font-size:var(--fs-md);font-weight:600;color:var(--ink-3);margin:0 0 var(--s-6);}
+#tadori-root .tdr-hub-nav{width:200px;flex:0 0 auto;border-right:1px solid var(--line);background:var(--paper-2);padding:var(--s-2) 0;overflow:auto;}
+#tadori-root .tdr-hub-group{padding:var(--s-3) var(--s-4) var(--s-1);font-size:var(--fs-xs);color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-weight:600;}
+#tadori-root .tdr-hub-navitem{display:block;padding:8px 16px;border-left:3px solid transparent;font-size:var(--fs-md);color:var(--ink-3);cursor:pointer;}
+#tadori-root .tdr-hub-navitem:hover{background:var(--paper-2-strong);color:var(--ink);}
+#tadori-root .tdr-hub-navitem.is-active{background:var(--accent-soft);color:var(--ink);border-left-color:var(--accent);font-weight:600;}
+#tadori-root .tdr-hub-pane{flex:1;min-width:0;padding:var(--s-5) var(--s-7);overflow:auto;background:var(--paper);}
+#tadori-root .tdr-pane-title{font-size:var(--fs-lg);font-weight:600;color:var(--ink);margin:0 0 var(--s-3);}
+#tadori-root .tdr-pane-desc{font-size:var(--fs-sm);line-height:1.7;color:var(--ink-3);background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3) var(--s-4);margin:0 0 var(--s-5);}
 
 #tadori-root .tdr-fieldgrid{display:grid;grid-template-columns:130px minmax(0,1fr);gap:var(--s-3) var(--s-4);align-items:center;}
 #tadori-root .tdr-fieldgrid > label{color:var(--ink-3);font-size:var(--fs-sm);justify-self:end;text-align:right;white-space:nowrap;}

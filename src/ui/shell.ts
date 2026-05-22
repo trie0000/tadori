@@ -43,10 +43,8 @@ export function boot(): void {
   const topbar = el('div', { class: 'tdr-topbar' }, [
     el('div', { class: 'tdr-brand' }, [
       el('span', { class: 'mark' }, ['辿']),
-      el('div', {}, [
-        el('div', {}, ['Tadori']),
-        el('span', { class: 'sub' }, ['ML ナレッジサーチ']),
-      ]),
+      el('span', { class: 'name' }, ['Tadori']),
+      el('span', { class: 'sub' }, ['ML ナレッジサーチ']),
     ]),
     el('div', { class: 'tdr-spacer' }),
     moonBtn,
