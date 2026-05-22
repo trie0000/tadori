@@ -8,7 +8,8 @@ import { openModal } from './modal';
 import { toast } from './toast';
 import {
   loadSettings, saveSettings, parseAddressList,
-  DEFAULT_CLAUDE_MODEL, DEFAULT_VOYAGE_MODEL,
+  DEFAULT_VOYAGE_MODEL,
+  CORP_AI_MODELS, CLAUDE_MODELS, EMBEDDING_MODELS,
   type RuntimeSettings, type Provider,
 } from '../api/aiSettings';
 import { isDeveloperMode, setDeveloperMode } from '../utils/devMode';
@@ -86,6 +87,16 @@ function mkRow(label: string, ctrl: HTMLElement, hint?: string): HTMLElement[] {
   return nodes;
 }
 
+function mkSelect(options: { value: string; label: string }[], current: string, onchange: (v: string) => void): HTMLSelectElement {
+  const sel = el('select', { class: 'tdr-input' }, options.map(o => {
+    const opt = el('option', { value: o.value }, [o.label]);
+    if (o.value === current) opt.setAttribute('selected', 'selected');
+    return opt;
+  }));
+  sel.addEventListener('change', () => onchange(sel.value));
+  return sel;
+}
+
 // ─── AI 接続 ──────────────────────────────────────────────────────────────────
 
 function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
@@ -114,15 +125,25 @@ function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
     '★ Spira と共有される設定です。どちらで変更しても両方のツールに反映されます。',
   ]));
 
-  // ── corp ブロック ──
+  // ── corp ブロック (Spira と同じ deploy-prefix 方式) ──
+  const corpModelOpts = CORP_AI_MODELS.map(m => ({ value: m.id, label: m.id }));
+  const embModelOpts = EMBEDDING_MODELS.map(m => ({ value: m, label: m }));
+  const overrideTa = el('textarea', { class: 'tdr-input', rows: '3', placeholder: '{"gpt-5":{"apiVersion":"2025-01-01-preview"}}' });
+  overrideTa.value = draft.corpOverridesRaw;
+  overrideTa.addEventListener('change', () => { draft.corpOverridesRaw = overrideTa.value; });
+
   const corpGrid = el('div', { class: 'tdr-fieldgrid' });
   corpGrid.append(
-    ...mkRow('中継サーバ URL', mkInput(draft.relayBaseUrl, v => { draft.relayBaseUrl = v; }), '例: http://localhost:18080'),
-    ...mkRow('API キー', mkInput(draft.apiKey, v => { draft.apiKey = v; }, 'password'), 'サブスクリプションキー (省略可)'),
-    ...mkRow('チャットモデル', mkInput(draft.chatDeployment, v => { draft.chatDeployment = v; }), 'RAG 回答用デプロイ名 (例: gpt-4o-mini)'),
-    ...mkRow('埋め込みモデル', mkInput(draft.embeddingDeployment, v => { draft.embeddingDeployment = v; }), '検索用デプロイ名 (例: text-embedding-3-small)'),
-    ...mkRow('API バージョン', mkInput(draft.apiVersion, v => { draft.apiVersion = v; }), '例: 2024-02-01'),
+    ...mkRow('API キー', mkInput(draft.apiKey, v => { draft.apiKey = v; }, 'password'), 'Azure OpenAI 互換 API キー'),
+    ...mkRow('ベース URL', mkInput(draft.relayBaseUrl, v => { draft.relayBaseUrl = v; }), '中継サーバ / ゲートウェイ (例: http://localhost:18080)'),
+    ...mkRow('デプロイ prefix', mkInput(draft.corpDeployPrefix, v => { draft.corpDeployPrefix = v; }), 'デプロイ名 = <prefix><モデル名(.除去)>'),
+    ...mkRow('チャットモデル', mkSelect(corpModelOpts, draft.chatModel, v => { draft.chatModel = v; }), 'RAG 回答生成に使うモデル'),
+    ...mkRow('埋め込みモデル', mkSelect(embModelOpts, draft.embeddingModel, v => { draft.embeddingModel = v; }), '検索ベクトル生成 (Tadori 固有)'),
+    ...mkRow('埋め込み API バージョン', mkInput(draft.apiVersion, v => { draft.apiVersion = v; }), '例: 2024-02-01'),
     ...mkRow('次元数', mkInput(String(draft.dimensions), v => { draft.dimensions = Number(v) || 256; }), 'Matryoshka 短縮次元数 (256)'),
+    el('label', { class: 'top' }, ['オーバーライド']),
+    overrideTa,
+    el('p', { class: 'tdr-hint' }, ['モデル毎に baseUrl/apiVersion/deploymentId を上書き (JSON, 任意)']),
   );
   const corpBlock = el('div', {}, [corpGrid]);
 
@@ -133,7 +154,7 @@ function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
     cGrid.append(
       el('p', { class: 'tdr-hint', style: 'grid-column:1/-1;margin-bottom:var(--s-2)' }, ['── Claude (回答生成) ──']),
       ...mkRow('Claude API キー', mkInput(draft.claudeApiKey, v => { draft.claudeApiKey = v; }, 'password'), 'sk-ant-... (この端末のみ保存)'),
-      ...mkRow('Claude モデル', mkInput(draft.claudeModel, v => { draft.claudeModel = v; }), `既定: ${DEFAULT_CLAUDE_MODEL}`),
+      ...mkRow('Claude モデル', mkSelect(CLAUDE_MODELS.map(m => ({ value: m.id, label: m.label })), draft.claudeModel, v => { draft.claudeModel = v; })),
       el('p', { class: 'tdr-hint', style: 'grid-column:1/-1;margin:var(--s-3) 0 var(--s-2)' }, ['── Voyage (検索埋め込み) ──']),
       ...mkRow('Voyage API キー', mkInput(draft.voyageApiKey, v => { draft.voyageApiKey = v; }, 'password'), 'pa-... Claude に埋め込み API が無いため'),
       ...mkRow('Voyage モデル', mkInput(draft.voyageModel, v => { draft.voyageModel = v; }), `既定: ${DEFAULT_VOYAGE_MODEL}`),

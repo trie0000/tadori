@@ -46,9 +46,9 @@ export async function generateAnswer(
     });
   }
 
-  const url = `${s.relayBaseUrl.replace(/\/+$/, '')}`
+  const url = `${s.chatBaseUrl.replace(/\/+$/, '')}`
     + `/openai/deployments/${encodeURIComponent(s.chatDeployment)}`
-    + `/chat/completions?api-version=${encodeURIComponent(s.apiVersion)}`;
+    + `/chat/completions?api-version=${encodeURIComponent(s.chatApiVersion)}`;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (s.apiKey) headers['api-key'] = s.apiKey;

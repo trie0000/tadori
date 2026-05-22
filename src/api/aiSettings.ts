@@ -1,67 +1,177 @@
 // AI / Tadori 設定の永続化 (localStorage)。
 //
-// ★ AI 接続設定は Spira と「共通」にする ★
+// ★ AI 接続設定は Spira と「方式ごと統一」する ★
 // Tadori は Spira と同じ SharePoint オリジン上で動くため localStorage を共有する。
-// 中継サーバ URL・API キー・モデル等は Spira と同じ `spira:ai:*` キーに保存し、
-// どちらのツールで設定しても両方に効くようにする (二重設定の手間をなくす)。
+// キー名・モデルIDの扱い・デプロイ名の組み立て方を Spira (src/api/aiSettings.ts) と
+// 完全に揃え、どちらのツールで設定しても両方に効くようにする。
 //
-// provider:
-//   - 'corp'   … 社内 AI (Azure OpenAI 互換) を中継サーバ経由で利用 (本番)
-//   - 'claude' … Anthropic Claude API + Voyage 埋め込みを直接利用 (開発者モード限定)
+// 社内 AI (corp / Azure OpenAI 互換):
+//   - corp:model はモデルID (例 gpt-4.1-mini) を保存。デプロイ名そのものではない。
+//   - デプロイ名 = `<prefix><モデル名(.除去)>` (deploymentIdFor)。
+//   - apiVersion はモデル別に導出 (reasoning 系 → preview)。overrides で上書き可。
+//   - 個人上書き (key) が無ければ `<key>:default` を読む (Spira が共有デフォルトを
+//     起動時に展開したキャッシュ)。Tadori は読むだけ (書き込みはしない)。
 //
-// 開発者モード OFF のときは provider が 'claude' でも 'corp' に丸める (Spira と同じ)。
+// provider='claude' は開発者モード限定。OFF のときは corp に丸める。
 
 import { isDeveloperMode } from '../utils/devMode';
 
 export type Provider = 'corp' | 'claude';
 
-// Spira と共有するキー
-const AI = {
-  provider:    'spira:ai:provider',
-  corpBaseUrl: 'spira:ai:corp:base-url',   // = 中継サーバのベース URL
-  corpKey:     'spira:ai:corp:key',
-  corpModel:   'spira:ai:corp:model',       // チャット(回答)モデルのデプロイ名
-  claudeKey:   'spira:ai:claude:key',
-  claudeModel: 'spira:ai:claude:model',
-} as const;
+export interface CorpAiModel {
+  id: string;
+  /** reasoning 系は max_completion_tokens / preview apiVersion を使う。 */
+  reasoning: boolean;
+}
 
-// Tadori 固有キー
-const TD = {
-  embeddingDeployment: 'tadori:embedding-deployment',
-  apiVersion:          'tadori:api-version',
+// Spira の CORP_AI_MODELS と同一。
+export const CORP_AI_MODELS: CorpAiModel[] = [
+  { id: 'gpt-5',        reasoning: true  },
+  { id: 'gpt-5-mini',   reasoning: true  },
+  { id: 'gpt-5-nano',   reasoning: true  },
+  { id: 'o3',           reasoning: true  },
+  { id: 'o4-mini',      reasoning: true  },
+  { id: 'gpt-4.1',      reasoning: false },
+  { id: 'gpt-4.1-mini', reasoning: false },
+  { id: 'gpt-4.1-nano', reasoning: false },
+  { id: 'gpt-4o',       reasoning: false },
+  { id: 'gpt-4o-mini',  reasoning: false },
+];
+
+export const CLAUDE_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'claude-opus-4-5',   label: 'Claude Opus 4.5' },
+  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5' },
+];
+
+// 埋め込みは Tadori 固有 (Spira は埋め込みを使わない)。デプロイ名は corp と同じ
+// prefix 方式で組み立てる。
+export const EMBEDDING_MODELS: string[] = [
+  'text-embedding-3-small',
+  'text-embedding-3-large',
+  'text-embedding-ada-002',
+];
+
+const DEFAULT_PROVIDER: Provider = 'corp';
+export const DEFAULT_CORP_MODEL = 'gpt-4.1-mini';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_VOYAGE_MODEL = 'voyage-3.5-lite';
+export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+const DEFAULT_EMBEDDING_API_VERSION = '2024-02-01';
+
+const KEY = {
+  // Spira と共有
+  provider:         'spira:ai:provider',
+  corpKey:          'spira:ai:corp:key',
+  corpModel:        'spira:ai:corp:model',
+  corpBaseUrl:      'spira:ai:corp:base-url',
+  corpDeployPrefix: 'spira:ai:corp:deploy-prefix',
+  corpOverrides:    'spira:ai:corp:overrides',
+  claudeKey:        'spira:ai:claude:key',
+  claudeModel:      'spira:ai:claude:model',
+  // Tadori 固有
+  embeddingModel:      'tadori:embedding-model',
+  embeddingApiVersion: 'tadori:api-version',
+  voyageKey:           'tadori:voyage:key',
+  voyageModel:         'tadori:voyage:model',
   dimensions:          'tadori:dimensions',
   listTitle:           'tadori:list-title',
   mlAddresses:         'tadori:ml-addresses',
   ingestIntervalSec:   'tadori:ingest-interval-sec',
-  voyageKey:           'tadori:voyage:key',
-  voyageModel:         'tadori:voyage:model',
 } as const;
 
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
-export const DEFAULT_VOYAGE_MODEL = 'voyage-3.5-lite';
+const DEFAULT_SUFFIX = ':default';
 
-function get(k: string, fallback = ''): string {
-  try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; }
+function lsGet(k: string): string {
+  try { return localStorage.getItem(k) ?? ''; } catch { return ''; }
 }
-function set(k: string, v: string): void {
+function lsSet(k: string, v: string): void {
   try { localStorage.setItem(k, v); } catch { /* quota */ }
 }
+/** 個人上書き → 共有デフォルトキャッシュ (Spira が展開) の順で読む。 */
+function lsGetEff(k: string): string {
+  return lsGet(k) || lsGet(k + DEFAULT_SUFFIX);
+}
+
+// ─── corp デプロイ名 / エンドポイント解決 (Spira と同一ロジック) ───────────────
+
+export function findCorpAiModel(modelId: string): CorpAiModel | null {
+  return CORP_AI_MODELS.find(m => m.id === modelId) ?? null;
+}
+
+export function deploymentIdFor(modelId: string): string {
+  const prefix = lsGetEff(KEY.corpDeployPrefix);
+  return prefix + modelId.replace(/\./g, '');
+}
+
+interface CorpOverride { baseUrl?: string; apiVersion?: string; deploymentId?: string; }
+function getOverrides(): Record<string, CorpOverride> {
+  const raw = lsGetEff(KEY.corpOverrides);
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw);
+    if (o && typeof o === 'object') return o as Record<string, CorpOverride>;
+  } catch { /* ignore */ }
+  return {};
+}
+
+function corpBaseUrl(): string {
+  return lsGetEff(KEY.corpBaseUrl).replace(/\/$/, '');
+}
+
+interface ResolvedEndpoint { baseUrl: string; apiVersion: string; deploymentId: string; }
+function resolveCorpChat(modelId: string): ResolvedEndpoint {
+  const m = findCorpAiModel(modelId);
+  const defaultApiVersion = m?.reasoning ? '2024-12-01-preview' : '2024-06-01';
+  const ov = getOverrides()[modelId] || {};
+  return {
+    baseUrl: (ov.baseUrl || corpBaseUrl()).replace(/\/$/, ''),
+    apiVersion: ov.apiVersion || defaultApiVersion,
+    deploymentId: ov.deploymentId || deploymentIdFor(modelId),
+  };
+}
+
+function getCorpModel(): string {
+  const stored = lsGetEff(KEY.corpModel);
+  if (stored && CORP_AI_MODELS.some(m => m.id === stored)) return stored;
+  return DEFAULT_CORP_MODEL;
+}
+
+function getEmbeddingModel(): string {
+  return lsGetEff(KEY.embeddingModel) || DEFAULT_EMBEDDING_MODEL;
+}
+
+// ─── RuntimeSettings ───────────────────────────────────────────────────────
 
 export interface RuntimeSettings {
   provider: Provider;
-  // corp (Azure OpenAI 互換 / 中継サーバ)
-  relayBaseUrl: string;
+
+  // corp 生値 (UI 往復用)
   apiKey: string;
-  chatDeployment: string;
-  embeddingDeployment: string;
-  apiVersion: string;
+  chatModel: string;
+  corpDeployPrefix: string;
+  corpOverridesRaw: string;
+  embeddingModel: string;
+
+  // corp 導出値 (リクエスト用)
+  chatBaseUrl: string;       // チャット URL のベース (per-model override 反映)
+  chatDeployment: string;    // チャットデプロイ名
+  chatApiVersion: string;    // チャット apiVersion
+
+  // 埋め込み (EmbedConfig を構造的に満たす)
+  relayBaseUrl: string;        // 埋め込み URL のベース (= corp ベース URL)
+  embeddingDeployment: string; // 埋め込みデプロイ名
+  apiVersion: string;          // 埋め込み apiVersion
   dimensions: number;
+
   // claude (開発者モード)
   claudeApiKey: string;
   claudeModel: string;
+
   // voyage 埋め込み (開発者モード)
   voyageApiKey: string;
   voyageModel: string;
+
   // tadori 取り込み
   listTitle: string;
   mlAddresses: string[];
@@ -70,45 +180,64 @@ export interface RuntimeSettings {
 
 /** provider を解決。開発者モード OFF のときは 'claude' を 'corp' に丸める。 */
 export function resolveProvider(): Provider {
-  const raw = get(AI.provider);
+  const raw = lsGetEff(KEY.provider);
   if (raw === 'claude' && isDeveloperMode()) return 'claude';
-  return 'corp';
+  return DEFAULT_PROVIDER;
 }
 
 export function loadSettings(): RuntimeSettings {
+  const chatModel = getCorpModel();
+  const chatEp = resolveCorpChat(chatModel);
+  const embeddingModel = getEmbeddingModel();
+
   return {
     provider: resolveProvider(),
-    relayBaseUrl: get(AI.corpBaseUrl, 'http://localhost:18080'),
-    apiKey: get(AI.corpKey),
-    chatDeployment: get(AI.corpModel, 'gpt-4o-mini'),
-    embeddingDeployment: get(TD.embeddingDeployment, 'text-embedding-3-small'),
-    apiVersion: get(TD.apiVersion, '2024-02-01'),
-    dimensions: Number(get(TD.dimensions, '256')) || 256,
-    claudeApiKey: get(AI.claudeKey),
-    claudeModel: get(AI.claudeModel, DEFAULT_CLAUDE_MODEL),
-    voyageApiKey: get(TD.voyageKey),
-    voyageModel: get(TD.voyageModel, DEFAULT_VOYAGE_MODEL),
-    listTitle: get(TD.listTitle, '受信メールリスト'),
-    mlAddresses: parseAddressList(get(TD.mlAddresses)),
-    ingestIntervalSec: Number(get(TD.ingestIntervalSec, '30')) || 30,
+
+    apiKey: lsGet(KEY.corpKey),
+    chatModel,
+    corpDeployPrefix: lsGetEff(KEY.corpDeployPrefix),
+    corpOverridesRaw: lsGetEff(KEY.corpOverrides),
+    embeddingModel,
+
+    chatBaseUrl: chatEp.baseUrl,
+    chatDeployment: chatEp.deploymentId,
+    chatApiVersion: chatEp.apiVersion,
+
+    relayBaseUrl: corpBaseUrl(),
+    embeddingDeployment: deploymentIdFor(embeddingModel),
+    apiVersion: lsGet(KEY.embeddingApiVersion) || DEFAULT_EMBEDDING_API_VERSION,
+    dimensions: Number(lsGet(KEY.dimensions) || '256') || 256,
+
+    claudeApiKey: lsGet(KEY.claudeKey),
+    claudeModel: lsGetEff(KEY.claudeModel) || DEFAULT_CLAUDE_MODEL,
+
+    voyageApiKey: lsGet(KEY.voyageKey),
+    voyageModel: lsGet(KEY.voyageModel) || DEFAULT_VOYAGE_MODEL,
+
+    listTitle: lsGet(KEY.listTitle) || '受信メールリスト',
+    mlAddresses: parseAddressList(lsGet(KEY.mlAddresses)),
+    ingestIntervalSec: Number(lsGet(KEY.ingestIntervalSec) || '30') || 30,
   };
 }
 
+/** 生値のみ永続化する (導出値は保存しない)。 */
 export function saveSettings(s: Partial<RuntimeSettings>): void {
-  if (s.provider !== undefined) set(AI.provider, s.provider);
-  if (s.relayBaseUrl !== undefined) set(AI.corpBaseUrl, s.relayBaseUrl);
-  if (s.apiKey !== undefined) set(AI.corpKey, s.apiKey);
-  if (s.chatDeployment !== undefined) set(AI.corpModel, s.chatDeployment);
-  if (s.embeddingDeployment !== undefined) set(TD.embeddingDeployment, s.embeddingDeployment);
-  if (s.apiVersion !== undefined) set(TD.apiVersion, s.apiVersion);
-  if (s.dimensions !== undefined) set(TD.dimensions, String(s.dimensions));
-  if (s.claudeApiKey !== undefined) set(AI.claudeKey, s.claudeApiKey.trim());
-  if (s.claudeModel !== undefined) set(AI.claudeModel, s.claudeModel);
-  if (s.voyageApiKey !== undefined) set(TD.voyageKey, s.voyageApiKey.trim());
-  if (s.voyageModel !== undefined) set(TD.voyageModel, s.voyageModel);
-  if (s.listTitle !== undefined) set(TD.listTitle, s.listTitle);
-  if (s.mlAddresses !== undefined) set(TD.mlAddresses, s.mlAddresses.join('\n'));
-  if (s.ingestIntervalSec !== undefined) set(TD.ingestIntervalSec, String(s.ingestIntervalSec));
+  if (s.provider !== undefined)         lsSet(KEY.provider, s.provider);
+  if (s.apiKey !== undefined)           lsSet(KEY.corpKey, s.apiKey.trim());
+  if (s.chatModel !== undefined)        lsSet(KEY.corpModel, s.chatModel);
+  if (s.relayBaseUrl !== undefined)     lsSet(KEY.corpBaseUrl, s.relayBaseUrl.trim());
+  if (s.corpDeployPrefix !== undefined) lsSet(KEY.corpDeployPrefix, s.corpDeployPrefix.trim());
+  if (s.corpOverridesRaw !== undefined) lsSet(KEY.corpOverrides, s.corpOverridesRaw.trim());
+  if (s.embeddingModel !== undefined)   lsSet(KEY.embeddingModel, s.embeddingModel);
+  if (s.apiVersion !== undefined)       lsSet(KEY.embeddingApiVersion, s.apiVersion.trim());
+  if (s.dimensions !== undefined)       lsSet(KEY.dimensions, String(s.dimensions));
+  if (s.claudeApiKey !== undefined)     lsSet(KEY.claudeKey, s.claudeApiKey.trim());
+  if (s.claudeModel !== undefined)      lsSet(KEY.claudeModel, s.claudeModel);
+  if (s.voyageApiKey !== undefined)     lsSet(KEY.voyageKey, s.voyageApiKey.trim());
+  if (s.voyageModel !== undefined)      lsSet(KEY.voyageModel, s.voyageModel);
+  if (s.listTitle !== undefined)        lsSet(KEY.listTitle, s.listTitle);
+  if (s.mlAddresses !== undefined)      lsSet(KEY.mlAddresses, s.mlAddresses.join('\n'));
+  if (s.ingestIntervalSec !== undefined) lsSet(KEY.ingestIntervalSec, String(s.ingestIntervalSec));
 }
 
 export function parseAddressList(raw: string): string[] {
