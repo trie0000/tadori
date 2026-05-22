@@ -23,10 +23,13 @@ interface IndexedMail extends IndexedVector {
 
 /** List から embedding 列が入っている行を読み、検索インデックスを構築。 */
 async function loadIndex(sp: SharePointClient, s: RuntimeSettings): Promise<IndexedMail[]> {
+  // 注意: embedding は Note(複数行テキスト)列で SharePoint の $filter は使えない。
+  // フィルタ可能な embedded_at(日時)で「埋め込み済み」を絞り、空 embedding は
+  // 後段でクライアント側スキップする。
   const sel = ['Id', 'Title', 'Created', COLUMNS.embedding, 'Body', 'From'].join(',');
   const rows = await sp.getItems(
     s.listTitle,
-    `$select=${sel}&$filter=${COLUMNS.embedding} ne null&$top=5000`,
+    `$select=${sel}&$filter=${COLUMNS.embeddedAt} ne null&$top=5000`,
   );
   const out: IndexedMail[] = [];
   for (const r of rows) {
