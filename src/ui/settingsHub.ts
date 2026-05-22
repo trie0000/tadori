@@ -21,6 +21,7 @@ import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { ingestToSegments } from '../db/writer';
+import { getEngine } from '../db/engine';
 
 type SectionId = 'ai' | 'ingest' | 'display' | 'diag' | 'dev';
 
@@ -63,7 +64,7 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
       case 'ai':      buildAiPane(pane, draft); break;
       case 'ingest':  buildIngestPane(pane, draft, root, siteUrl); break;
       case 'display': buildDisplayPane(pane, root); break;
-      case 'diag':    buildDiagPane(pane, draft, root); break;
+      case 'diag':    buildDiagPane(pane, draft, root, siteUrl); break;
       case 'dev':     buildDevPane(pane, draft, root, siteUrl); break;
     }
   }
@@ -287,6 +288,10 @@ function buildOutlookImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
         if (r.cancelled) {
           status.textContent = `停止しました: 保存済み 新規 ${r.added} 件 (セグメント ${r.segments})${dup}。再実行で続きから取り込めます。`;
           toast(root, `停止 (新規 ${r.added} 件は保存済み)`, 'warn');
+        } else if (r.added === 0) {
+          // 新規 0 件 = 取得分はすべて登録済み。失敗ではない旨を明示。
+          status.textContent = `すべて登録済みでした (取得 ${mails.length} 件 / 新規 0 件)。SharePoint への追記はありません。`;
+          toast(root, `新規なし (${mails.length} 件はすべて登録済み)`, 'warn');
         } else {
           status.textContent = `完了: 取得 ${mails.length} 件 / 新規 ${r.added} 件 (セグメント ${r.segments})${dup}`;
           toast(root, `Outlook から ${r.added} 件取り込みました`, 'ok');
@@ -329,8 +334,27 @@ function buildDisplayPane(pane: HTMLElement, root: HTMLElement): void {
 
 // ─── 診断 ─────────────────────────────────────────────────────────────────────
 
-function buildDiagPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement): void {
+function buildDiagPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement, siteUrl: string): void {
   paneHead(pane, '診断', '現在の provider で埋め込み API に接続できるか確認します。');
+
+  // 登録済みベクトル件数 (SharePoint から同期したローカルDBの実件数)。
+  const countRow = el('div', { class: 'tdr-diag' }, [
+    el('span', {}, ['登録済みベクトル件数']),
+    el('span', { class: 'stat' }, ['確認中…']),
+  ]);
+  pane.appendChild(countRow);
+  void (async () => {
+    const stat = countRow.querySelector('.stat') as HTMLElement;
+    try {
+      const eng = await getEngine(siteUrl);
+      await eng.sync.sync();
+      stat.textContent = `${eng.db.size} 件`;
+      stat.className = 'stat ok';
+    } catch (e) {
+      stat.textContent = e instanceof Error ? e.message.slice(0, 60) : '取得失敗';
+      stat.className = 'stat ng';
+    }
+  })();
 
   function mkDiagRow(label: string): { row: HTMLElement; set: (ok: boolean, text: string) => void } {
     const stat = el('span', { class: 'stat' }, ['—']);
