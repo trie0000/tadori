@@ -123,7 +123,9 @@ if (watch || serve) {
       `try{if(w.localStorage&&localStorage.getItem('tadori.dev.bundle-source')==='local')dev=(localStorage.getItem('tadori.dev.local-base')||'http://127.0.0.1:18080/tadori').replace(/\\/+$/,'');}catch(e){}` +
       `var primary=dev||${overrideBase}||sp;var fb=(primary!==sp&&sp)?sp:'';` +
       `function inject(base,ver){var o=d.getElementById('tadori-script');if(o)o.remove();var s=d.createElement('script');s.id='tadori-script';s.src=base+'/tadori.bundle.js?v='+encodeURIComponent(ver);s.onerror=function(){if(fb){var x=fb;fb='';go(x);}};d.body.appendChild(s);}` +
-      `function go(base){fetch(base+'/version.txt?t='+Date.now(),{credentials:'include'}).then(function(r){if(!r.ok)throw 0;return r.text();}).then(function(t){inject(base,(t||'').trim()||String(Date.now()));}).catch(function(){if(fb){var x=fb;fb='';go(x);}else{inject(base,String(Date.now()));}});}` +
+      // credentials は同一オリジンのみ送る (SP は same-origin で Cookie 必要 / ローカル relay
+      // はクロスオリジンで Allow-Origin:* なので credentials:'include' だと CORS で拒否される)。
+      `function go(base){fetch(base+'/version.txt?t='+Date.now(),{credentials:'same-origin'}).then(function(r){if(!r.ok)throw 0;return r.text();}).then(function(t){inject(base,(t||'').trim()||String(Date.now()));}).catch(function(){if(fb){var x=fb;fb='';go(x);}else{inject(base,String(Date.now()));}});}` +
       `go(primary);})();`;
 
     fs.writeFileSync('dist/tadori.loader.js', loader);
