@@ -18,6 +18,9 @@
   --z-overlay:2147483600; --z-modal:2147483700; --z-toast:2147483800;
   font-family:var(--font-sans); font-size:var(--fs-base); line-height:var(--lh-base); color:var(--ink);
   position:fixed; inset:0; z-index:2147483600; display:flex; flex-direction:column; background:var(--paper);
+  /* all:initial が user-select を auto に戻すため、画面全体を明示的に選択可能にする
+     (回答・出典・エラーなどどこでもマウスドラッグでコピーできるように)。 */
+  user-select:text; -webkit-user-select:text;
 }
 #tadori-root[data-theme="dark"]{
   --ink:#e8e4d8; --ink-3:#a8a39a; --ink-4:#7a766c;
