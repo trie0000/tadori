@@ -116,8 +116,10 @@ export function pagesToIngestMails(pages: OneNotePage[]): IngestMail[] {
   return out;
 }
 
-/** OneNote ページに追記する 1 ブロック。h=見出し / p=段落 / ul=箇条書き / ol=番号付き / q=引用。 */
-export interface AppendBlock { type: 'h' | 'p' | 'ul' | 'ol' | 'q'; text: string; }
+/** OneNote ページに追記する 1 ブロック。
+ *  type: h=見出し / p=段落 / ul=箇条書き / ol=番号付き / q=引用 / blank=空行 (段落区切り)
+ *  level: ネスト深さ (0 = トップ。Markdown の半角スペース 2 つで +1) */
+export interface AppendBlock { type: 'h' | 'p' | 'ul' | 'ol' | 'q' | 'blank'; text: string; level?: number; }
 
 /** 既存 OneNote ページの末尾に新規 Outline として追記する (relay 経由)。 */
 export async function appendOneNotePage(
@@ -140,28 +142,44 @@ export async function appendOneNotePage(
 }
 
 /** Markdown 文字列を簡易ブロック列へ。# 見出し / - 箇条書き / 1. 番号 / > 引用 / それ以外は段落。
- *  AI 回答を OneNote に貼るための「最低限の構造保持」変換。完全な markdown ではない。 */
+ *  AI 回答を OneNote に貼るための「最低限の構造保持」変換。完全な markdown ではない。
+ *  インデント (先頭の半角スペース) を 2 文字 = 1 レベルとして level に変換 (タブは 4 文字相当)。
+ *  空行は type=blank として出力 (OneNote 側で段落区切りに使う)。 */
 export function markdownToBlocks(md: string): AppendBlock[] {
   const out: AppendBlock[] = [];
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   let para: string[] = [];
+  let paraLevel = 0;
   const flushPara = (): void => {
-    if (para.length) { out.push({ type: 'p', text: inlineMd(para.join(' ').trim()) }); para = []; }
+    if (para.length) { out.push({ type: 'p', text: inlineMd(para.join(' ').trim()), level: paraLevel }); para = []; paraLevel = 0; }
+  };
+  const indentLevel = (raw: string): number => {
+    let n = 0;
+    for (const ch of raw) {
+      if (ch === ' ') n += 1;
+      else if (ch === '\t') n += 4;
+      else break;
+    }
+    return Math.floor(n / 2);
   };
   for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) { flushPara(); continue; }
-    const h = line.match(/^(#{1,6})\s+(.+)$/);
-    if (h) { flushPara(); out.push({ type: 'h', text: inlineMd(h[2]) }); continue; }
-    const ul = line.match(/^[-*]\s+(.+)$/);
-    if (ul) { flushPara(); out.push({ type: 'ul', text: inlineMd(ul[1]) }); continue; }
-    const ol = line.match(/^\d+\.\s+(.+)$/);
-    if (ol) { flushPara(); out.push({ type: 'ol', text: inlineMd(ol[1]) }); continue; }
-    const q = line.match(/^>\s*(.*)$/);
-    if (q) { flushPara(); out.push({ type: 'q', text: inlineMd(q[1]) }); continue; }
-    para.push(line);
+    const trimmed = raw.trim();
+    if (!trimmed) { flushPara(); out.push({ type: 'blank', text: '', level: 0 }); continue; }
+    const level = indentLevel(raw);
+    const h = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (h) { flushPara(); out.push({ type: 'h', text: inlineMd(h[2]), level: 0 }); continue; }
+    const ul = trimmed.match(/^[-*]\s+(.+)$/);
+    if (ul) { flushPara(); out.push({ type: 'ul', text: inlineMd(ul[1]), level }); continue; }
+    const ol = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (ol) { flushPara(); out.push({ type: 'ol', text: inlineMd(ol[1]), level }); continue; }
+    const q = trimmed.match(/^>\s*(.*)$/);
+    if (q) { flushPara(); out.push({ type: 'q', text: inlineMd(q[1]), level: 0 }); continue; }
+    if (para.length === 0) paraLevel = level;
+    para.push(trimmed);
   }
   flushPara();
+  // 末尾の blank は不要なので削る (見栄え用に最後に余白を入れない)
+  while (out.length && out[out.length - 1].type === 'blank') out.pop();
   return out;
 }
 

@@ -831,41 +831,95 @@ function Invoke-OneNoteAppend {
         $sizeEl = $doc.CreateElement('one', 'Size', $oneNs)
         $sizeEl.SetAttribute('width', '500'); $sizeEl.SetAttribute('height', '20'); $sizeEl.SetAttribute('isSetByUser', 'false')
         [void]$outline.AppendChild($sizeEl)
-        $oeChildren = $doc.CreateElement('one', 'OEChildren', $oneNs)
+        $rootChildren = $doc.CreateElement('one', 'OEChildren', $oneNs)
 
-        # 1 ブロック = 1 OE (テキストノードに HTML を CDATA で入れる)。
-        # OneNote の <one:T> は CDATA 内の限定 HTML タグ (b/i/u/span/br/font 等) を解釈する。
-        function Add-OE {
-            param($oeChildren, $doc, $oneNs, [string]$html)
+        # OEChildren コンテナ作成ヘルパ。
+        function New-OEChildren { param($doc, $oneNs) return $doc.CreateElement('one', 'OEChildren', $oneNs) }
+        # OE 作成ヘルパ。HTML 入りテキストを CDATA で <one:T> に入れる。
+        # OneNote の <one:T> は限定 HTML (b/i/u/span/br/font/a 等) を解釈する。
+        function New-OE {
+            param($doc, $oneNs, [string]$html)
             $oe = $doc.CreateElement('one', 'OE', $oneNs)
             $t  = $doc.CreateElement('one', 'T', $oneNs)
             [void]$t.AppendChild($doc.CreateCDataSection($html))
             [void]$oe.AppendChild($t)
-            [void]$oeChildren.AppendChild($oe)
+            return $oe
         }
 
-        # 見出しは <b> で 1 行目に
+        # 見出しは <b> で 1 行目に (level=0 固定)
         if ($heading) {
             $safe = ($heading -replace '&', '&amp;') -replace '<', '&lt;' -replace '>', '&gt;'
             $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-            Add-OE $oeChildren $doc $oneNs ("<b>{0}</b> <span style=`"color:#888;font-size:9pt`">[{1}]</span>" -f $safe, $stamp)
+            $hHtml = "<b>{0}</b> <span style=`"color:#888;font-size:9pt`">[{1}]</span>" -f $safe, $stamp
+            [void]$rootChildren.AppendChild((New-OE $doc $oneNs $hHtml))
         }
+
+        # ネスト管理: parentsByLevel[L] = レベル L のブロックが入る OEChildren コンテナ。
+        # parentsByLevel[0] は rootChildren。L>0 は親 OE の中に必要時に <one:OEChildren> を作る。
+        $parentsByLevel = New-Object 'System.Collections.Generic.Dictionary[int,object]'
+        $parentsByLevel[0] = $rootChildren
+        $lastOEByLevel = New-Object 'System.Collections.Generic.Dictionary[int,object]'
+
         foreach ($b in $blocks) {
             $type = [string]$b.type
             $text = [string]$b.text
-            if (-not $text) { continue }
-            # 制御文字 + 危険タグだけ落としつつ、b/i/u/strong/em/br/a 等は通す
-            $safe = $text -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
-            switch ($type) {
-                'h'  { Add-OE $oeChildren $doc $oneNs ("<b>" + $safe + "</b>") }
-                'ul' { Add-OE $oeChildren $doc $oneNs ("• " + $safe) }
-                'ol' { Add-OE $oeChildren $doc $oneNs ($safe) }   # 番号はクライアントが付ける
-                'q'  { Add-OE $oeChildren $doc $oneNs ("<span style=`"color:#888`">▍ " + $safe + "</span>") }
-                default { Add-OE $oeChildren $doc $oneNs $safe }
+            $lvl = 0
+            if ($null -ne $b.level) {
+                try { $lvl = [int]$b.level } catch { $lvl = 0 }
             }
+            if ($lvl -lt 0) { $lvl = 0 }
+            if ($lvl -gt 8) { $lvl = 8 } # 念のため深さ制限
+
+            # 空行: ルートに空 OE を追加 (段落区切り用)。ネスト状態もリセット。
+            if ($type -eq 'blank') {
+                [void]$rootChildren.AppendChild((New-OE $doc $oneNs ''))
+                $lastOEByLevel.Clear()
+                # level 0 のコンテナだけ残す
+                $parentsByLevel.Clear()
+                $parentsByLevel[0] = $rootChildren
+                continue
+            }
+            if (-not $text) { continue }
+
+            # この level の親コンテナを確保:
+            # parentsByLevel[$lvl] が未設定の場合、最も近い親レベル L' の OE に
+            # OEChildren を作って parentsByLevel[$lvl] にする。
+            if (-not $parentsByLevel.ContainsKey($lvl)) {
+                # 直近上位の親 OE を探す
+                $p = $lvl - 1
+                while ($p -ge 0 -and (-not $lastOEByLevel.ContainsKey($p))) { $p-- }
+                if ($p -lt 0) {
+                    # 親が無い (急に L>0 で始まった等) → ルートに付ける
+                    $parentsByLevel[$lvl] = $rootChildren
+                } else {
+                    $parentOE = $lastOEByLevel[$p]
+                    $childContainer = New-OEChildren $doc $oneNs
+                    [void]$parentOE.AppendChild($childContainer)
+                    $parentsByLevel[$lvl] = $childContainer
+                }
+            }
+
+            # 制御文字だけ落とす (b/i/u/strong/em/br/a/span 等は通す)
+            $safe = $text -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+            $html = switch ($type) {
+                'h'  { "<b>" + $safe + "</b>" }
+                'ul' { "• " + $safe }
+                'ol' { $safe }   # 番号はクライアントが付与
+                'q'  { "<span style=`"color:#888`">▍ " + $safe + "</span>" }
+                default { $safe }
+            }
+            $oe = New-OE $doc $oneNs $html
+            [void]$parentsByLevel[$lvl].AppendChild($oe)
+            $lastOEByLevel[$lvl] = $oe
+
+            # 配下のレベルキャッシュは破棄 (次に深いブロックが来たら再作成)
+            $deeper = @($parentsByLevel.Keys | Where-Object { $_ -gt $lvl })
+            foreach ($k in $deeper) { [void]$parentsByLevel.Remove($k) }
+            $deeperOE = @($lastOEByLevel.Keys | Where-Object { $_ -gt $lvl })
+            foreach ($k in $deeperOE) { [void]$lastOEByLevel.Remove($k) }
         }
 
-        [void]$outline.AppendChild($oeChildren)
+        [void]$outline.AppendChild($rootChildren)
         [void]$page.AppendChild($outline)
 
         # 更新。dateExpectedLastModified を MinValue にして衝突チェックを省略 (末尾追加なので安全)。
