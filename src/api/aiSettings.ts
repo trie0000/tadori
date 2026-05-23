@@ -83,6 +83,8 @@ const KEY = {
   ragMinScore:         'tadori:rag-min-score',
   ragKeywordWeight:    'tadori:rag-keyword-weight',
   enterSends:          'tadori:enter-sends',
+  rerankEnabled:       'tadori:rerank-enabled',
+  rerankCandidates:    'tadori:rerank-candidates',
 } as const;
 
 const DEFAULT_SUFFIX = ':default';
@@ -188,6 +190,10 @@ export interface RuntimeSettings {
   ragKeywordWeight: number;
   /** Enter キー単独で送信するか (true=Enter送信/Shift+Enter改行、false=Ctrl/⌘+Enter送信)。 */
   enterSends: boolean;
+  /** 再ランカーで検索候補を AI に並べ替えさせる (+1 AI コール、精度向上)。 */
+  rerankEnabled: boolean;
+  /** 再ランカーへ渡す候補件数 (この件数まで多めに取得し、LLM で並べ替えて上位 ragTopK を採用)。 */
+  rerankCandidates: number;
 }
 
 /** provider を解決。開発者モード OFF のときは 'claude' を 'corp' に丸める。 */
@@ -234,6 +240,8 @@ export function loadSettings(): RuntimeSettings {
     ragMinScore: parseMinScore(lsGet(KEY.ragMinScore)),
     ragKeywordWeight: parseWeight(lsGet(KEY.ragKeywordWeight)),
     enterSends: lsGet(KEY.enterSends) === '1',
+    rerankEnabled: lsGet(KEY.rerankEnabled) === '1',
+    rerankCandidates: Math.min(30, Math.max(5, Number(lsGet(KEY.rerankCandidates) || '15') || 15)),
   };
 }
 
@@ -260,6 +268,8 @@ export function saveSettings(s: Partial<RuntimeSettings>): void {
   if (s.ragMinScore !== undefined)       lsSet(KEY.ragMinScore, String(Math.min(1, Math.max(0, s.ragMinScore))));
   if (s.ragKeywordWeight !== undefined)  lsSet(KEY.ragKeywordWeight, String(Math.min(1, Math.max(0, s.ragKeywordWeight))));
   if (s.enterSends !== undefined)        lsSet(KEY.enterSends, s.enterSends ? '1' : '');
+  if (s.rerankEnabled !== undefined)     lsSet(KEY.rerankEnabled, s.rerankEnabled ? '1' : '');
+  if (s.rerankCandidates !== undefined)  lsSet(KEY.rerankCandidates, String(Math.min(30, Math.max(5, Math.round(s.rerankCandidates)))));
 }
 
 function parseMinScore(raw: string): number {

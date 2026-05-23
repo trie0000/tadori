@@ -245,6 +245,25 @@ function buildSearchPane(pane: HTMLElement, draft: RuntimeSettings): void {
     el('span', { class: 'tdr-hint' }, ['キーワード']),
     wLabel,
   ]));
+
+  // 再ランカー (LLM で候補を並べ替え)。
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, ['再ランカー (精度向上)']));
+  pane.appendChild(el('p', { class: 'tdr-hint' }, [
+    '検索で取った候補を AI で関連度順に並べ替えてから回答を生成します。精度は上がりますが、1 質問あたり AI コールが 1 回追加されるため利用料が増えます。',
+  ]));
+  const rerankCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  rerankCb.checked = !!draft.rerankEnabled;
+  rerankCb.addEventListener('change', () => { draft.rerankEnabled = rerankCb.checked; });
+  pane.appendChild(el('label', { style: 'display:inline-flex;align-items:center;gap:var(--s-3);margin-top:var(--s-3);cursor:pointer' }, [
+    rerankCb, el('span', {}, ['再ランカーを有効にする']),
+  ]));
+  const grid2 = el('div', { class: 'tdr-fieldgrid', style: 'margin-top:var(--s-3)' });
+  grid2.append(
+    ...mkRow('候補数 (5〜30)', mkInput(String(draft.rerankCandidates), v => {
+      draft.rerankCandidates = Math.min(30, Math.max(5, Number(v) || 15));
+    }), '再ランカーへ渡す候補件数。多いほど精度↑だが入力トークン↑。デフォルト 15'),
+  );
+  pane.appendChild(grid2);
 }
 
 // ─── 除外ルール ─────────────────────────────────────────────────────────────

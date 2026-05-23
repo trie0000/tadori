@@ -9,7 +9,7 @@ import { searchVectors, getThread } from '../search/vectorSearch';
 import { loadRules, matchesAnyRule } from '../search/exclusionRules';
 import { htmlToText, renderMailBody } from '../lib/mailhtml';
 import { cleanBody } from '../lib/mailtext';
-import { generateAnswer, type RagSource, type ChatHistoryMsg } from '../rag/client';
+import { generateAnswer, rerankByLLM, type RagSource, type ChatHistoryMsg } from '../rag/client';
 import { loadSettings, saveSettings, CORP_AI_MODELS, CLAUDE_MODELS } from '../api/aiSettings';
 import { isDeveloperMode } from '../utils/devMode';
 import { renderMarkdown } from '../lib/markdown';
@@ -385,12 +385,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     return out;
   }
 
-  /** 1 ターンの共通処理: ヒット取得 → 生成 → 整形 → 保存。停止/エラー対応込み。 */
+  /** 1 ターンの共通処理: ヒット取得 → (任意で再ランカー) → 生成 → 整形 → 保存。 */
   async function converse(opts: {
     displayQ: string;
     llmQuestion: string;
     loadingLabel: string;
     getHits: (signal: AbortSignal) => Promise<SavedHit[]>;
+    /** 再ランカー (RAG 検索向け) を適用するか。経緯要約等は false。 */
+    rerankable?: boolean;
   }): Promise<void> {
     if (generating) return;
     if (!hasTurns) { emptyState.remove(); hasTurns = true; }
@@ -423,12 +425,27 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       refreshList();
     };
 
+    const addUsage = (u: { yen: number }): void => { yen = (yen ?? 0) + u.yen; };
+
     try {
       hits = await opts.getHits(signal);
       if (hits.length === 0) {
         refs.answerText.textContent = '該当するメールが見つかりませんでした。';
         return;
       }
+
+      // 再ランカー: 取得済み候補を LLM で並べ替えて、上位 ragTopK を残す。
+      if (opts.rerankable && s.rerankEnabled && hits.length > 1) {
+        refs.answerText.replaceChildren(thinkingEl('候補を絞り込み中'));
+        const candidates = hits.map(h => ({
+          subject: h.subject, from: h.from, date: h.date,
+          body: cleanBody(h.isHtml ? htmlToText(h.body) : h.body),
+        }));
+        const order = await rerankByLLM(opts.llmQuestion, candidates, s, signal, addUsage);
+        const reordered = order.map(i => hits[i]).filter(Boolean) as SavedHit[];
+        hits = reordered.slice(0, s.ragTopK);
+      }
+
       refs.answerText.replaceChildren(thinkingEl('回答を生成中'));
 
       // RAG にはプレーンテキスト + 引用履歴を剥がした「新規発言だけ」を渡す。
@@ -445,7 +462,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         if (firstDelta) { refs.answerText.textContent = ''; firstDelta = false; } // 「生成中」を消す
         refs.answerText.textContent = full; // ストリーム中はプレーン (タイプ感)
         scrollBottom();
-      }, signal, title => { aiTitle = title; }, history, qs => { suggestions = qs; }, u => { yen = u.yen; });
+      }, signal, title => { aiTitle = title; }, history, qs => { suggestions = qs; }, addUsage);
 
       save();
 
@@ -472,9 +489,12 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       displayQ: q,
       llmQuestion: q,
       loadingLabel: 'メールを検索中',
+      rerankable: true,
       getHits: async () => {
         const s = loadSettings();
-        const raw = await searchVectors(q, s, siteUrl, s.ragTopK);
+        // 再ランカー有効時は多めに取って後で絞る。
+        const topK = s.rerankEnabled ? Math.max(s.rerankCandidates, s.ragTopK) : s.ragTopK;
+        const raw = await searchVectors(q, s, siteUrl, topK);
         // 除外ルール (件名/送信者/To/Cc/本文 の部分一致) で先に弾く。
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;

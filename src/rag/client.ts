@@ -8,6 +8,88 @@ import { chatYen, estimateTokens } from '../usage/pricing';
 
 export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; yen: number; }
 
+const RERANK_SYSTEM = [
+  'あなたは社内メーリングリスト検索の関連度判定アシスタントです。',
+  'ユーザーの質問に対して、提示された候補メールを「関連が高い順」に並べ替えてください。',
+  '出力は最も関連が高い順のインデックス番号 (0 始まり) をカンマ区切りで 1 行のみ。',
+  '説明・前置き・括弧・引用符・追加テキストは一切不要です。',
+  '例: 3,0,7,2,1',
+].join('\n');
+
+export interface RerankCandidate { subject: string; from: string; date: string; body: string; }
+
+function buildRerankPrompt(question: string, candidates: RerankCandidate[]): string {
+  const blocks = candidates.map((c, i) => {
+    const body = (c.body || '').slice(0, 400).replace(/\s+/g, ' ');
+    return `[${i}] 件名: ${c.subject}\n送信者: ${c.from} / ${c.date}\n本文: ${body}`;
+  }).join('\n\n');
+  return `質問: ${question}\n\n候補:\n\n${blocks}\n\n最も関連が高い順のインデックス (カンマ区切り):`;
+}
+
+function parseRerankIndices(text: string, n: number): number[] {
+  // 数字シーケンスを順に抽出 → 範囲内 + 重複除去
+  const nums = (text.match(/\d+/g) || []).map(Number).filter(x => x >= 0 && x < n);
+  const seen = new Set<number>();
+  const order: number[] = [];
+  for (const x of nums) if (!seen.has(x)) { seen.add(x); order.push(x); }
+  // 抜けた候補を末尾に補完 (LLM が全件並べなかった場合)
+  for (let i = 0; i < n; i++) if (!seen.has(i)) order.push(i);
+  return order;
+}
+
+/** 候補メール群を LLM で関連度順に並べ替え、元インデックスの並びを返す。
+ *  失敗時は元順序 ([0..n-1])。利用料は onUsage に通知 (チャットと同じ会計)。 */
+export async function rerankByLLM(
+  question: string,
+  candidates: RerankCandidate[],
+  s: RuntimeSettings,
+  signal?: AbortSignal,
+  onUsage?: (u: ChatUsage) => void,
+): Promise<number[]> {
+  if (candidates.length <= 1) return candidates.map((_, i) => i);
+  const userPrompt = buildRerankPrompt(question, candidates);
+  const inTok = estimateTokens(RERANK_SYSTEM) + estimateTokens(userPrompt);
+  const identity = candidates.map((_, i) => i);
+  try {
+    let text = '';
+    if (s.provider === 'claude') {
+      text = await streamClaude({
+        apiKey: s.claudeApiKey, model: s.claudeModel, system: RERANK_SYSTEM,
+        messages: [{ role: 'user', content: userPrompt }], onText: () => { /* noop */ }, signal,
+      });
+      recordChat(s.claudeModel, inTok, estimateTokens(text));
+      onUsage?.({ model: s.claudeModel, inputTokens: inTok, outputTokens: estimateTokens(text), yen: chatYen(s.claudeModel, inTok + estimateTokens(text)) });
+    } else {
+      const url = `${s.chatBaseUrl.replace(/\/+$/, '')}`
+        + `/openai/deployments/${encodeURIComponent(s.chatDeployment)}`
+        + `/chat/completions?api-version=${encodeURIComponent(s.chatApiVersion)}`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (s.apiKey) headers['api-key'] = s.apiKey;
+      const res = await fetch(url, {
+        method: 'POST', headers, credentials: 'omit', signal,
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: RERANK_SYSTEM },
+            { role: 'user', content: userPrompt },
+          ],
+          stream: false,
+        }),
+      });
+      if (!res.ok) return identity;
+      const json = await res.json() as { choices?: { message?: { content?: string } }[] };
+      text = json.choices?.[0]?.message?.content ?? '';
+      const outTok = estimateTokens(text);
+      recordChat(s.chatModel, inTok, outTok);
+      onUsage?.({ model: s.chatModel, inputTokens: inTok, outputTokens: outTok, yen: chatYen(s.chatModel, inTok + outTok) });
+    }
+    const order = parseRerankIndices(text, candidates.length);
+    return order.length === candidates.length ? order : identity;
+  } catch {
+    return identity; // 失敗・中断時は元の順序を維持
+  }
+}
+
+
 export interface RagSource {
   /** 1 始まりの出典番号 (回答中の [n] と対応)。 */
   n: number;
