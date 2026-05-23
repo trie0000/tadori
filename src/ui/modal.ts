@@ -14,6 +14,7 @@ export function openModal(opts: {
   footer?: HTMLElement;
   small?: boolean;
   large?: boolean; // 設定ハブ用: 項目で大きさが変わらない固定サイズ
+  xlarge?: boolean; // OneNote 追記用: lg より広く + body スクロール + footer 常時表示
   bodyless?: boolean; // body を直接 modal に入れる (hub のように内部スクロール自前管理)
   onClose?: () => void; // ✕ / Esc / backdrop で閉じた時にも呼ばれる
 }): ModalHandle {
@@ -25,7 +26,7 @@ export function openModal(opts: {
   const modalChildren: HTMLElement[] = [header, opts.body];
   if (opts.footer) modalChildren.push(opts.footer);
 
-  const sizeClass = opts.large ? ' tdr-modal--lg' : opts.small ? ' tdr-modal--sm' : '';
+  const sizeClass = opts.xlarge ? ' tdr-modal--xl' : opts.large ? ' tdr-modal--lg' : opts.small ? ' tdr-modal--sm' : '';
   const modal = el('div', { class: `tdr-modal${sizeClass}`, role: 'dialog', 'aria-modal': 'true' }, modalChildren);
   const backdrop = el('div', { class: 'tdr-backdrop' }, [modal]);
 

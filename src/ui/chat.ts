@@ -411,28 +411,6 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     return `OneNote 追記候補ページ一覧 (取り込み済み):\n${lines}${curHint}`;
   }
 
-  /** AI が出力した「OneNote 追記候補」を回答の下に「通知バー」として描画。
-   *  [内容を確認して追記] で大きなモーダルが開き、編集 → 確定する流れ。 */
-  function renderAppendSuggestion(
-    host: HTMLElement, sug: OneNoteAppendSuggestion, relayBaseUrl: string,
-    question: string, answer: string, hits: SavedHit[],
-  ): void {
-    const notice = el('div', { class: 'tdr-append-notice' });
-    const lead = el('div', { class: 'tdr-append-notice-lead' }, [
-      el('span', { class: 'ic', html: icons.notebook(16) }),
-      el('span', { class: 'lbl' }, ['AI が OneNote 追記候補を生成しました']),
-      el('span', { class: 'sub' }, [sug.heading ? `見出し: ${sug.heading}` : '内容を確認してください']),
-    ]);
-    const openBtn  = el('button', { class: 'tdr-btn tdr-btn--primary' }, ['内容を確認して追記']);
-    const skipBtn  = el('button', { class: 'tdr-btn' }, ['破棄']);
-    openBtn.addEventListener('click', () => {
-      void openAppendOneNoteModal(question, answer, relayBaseUrl, sug, hits);
-    });
-    skipBtn.addEventListener('click', () => { notice.remove(); });
-    notice.append(lead, el('div', { class: 'tdr-append-notice-actions' }, [skipBtn, openBtn]));
-    host.appendChild(notice);
-  }
-
   /** 出典フッターを Markdown で組み立てる。
    *  - 引用された [n] のヒットだけを採用 (回答中で実際に参照されたもの)。
    *  - メール: "[n] **件名** — 送信者 (YYYY-MM-DD HH:mm)"
@@ -754,7 +732,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const confirmBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, ['OneNote に追記']);
     const footer = el('div', { class: 'tdr-modal-footer' }, [cancelBtn, confirmBtn]);
 
-    const handle = openModal({ root, title: 'OneNote に追記', body, footer, large: true });
+    const handle = openModal({ root, title: 'OneNote に追記', body, footer, xlarge: true });
     cancelBtn.addEventListener('click', () => handle.close());
 
     // モーダルを開いた後で OneNote ハイパーリンクを非同期取得 → 本文をリビルド。
@@ -895,11 +873,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       if (!full.trim()) return;
       const ms = Math.round(performance.now() - t0);
       finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen, createdAt);
-      if (appendSuggestion) renderAppendSuggestion(refs.aBody, appendSuggestion, s.relayBaseUrl, opts.displayQ, full, hits);
       if (suggestions.length) renderSuggest(refs.aBody, suggestions);
       const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
       if (saved.turns.length === 1 && aiTitle) setTitle(currentId, aiTitle);
       refreshList();
+      // AI が OneNote 追記候補を出した場合は、回答 finalize 直後に確認モーダルを自動で開く。
+      // 旧仕様の「回答下に通知バーを置いて 1 クリック」よりも 1 アクション減る。
+      if (appendSuggestion) {
+        void openAppendOneNoteModal(opts.displayQ, full, s.relayBaseUrl, appendSuggestion, hits);
+      }
     };
 
     const addUsage = (u: { yen: number }): void => { yen = (yen ?? 0) + u.yen; };
