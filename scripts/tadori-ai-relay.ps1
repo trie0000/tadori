@@ -556,11 +556,12 @@ function Invoke-OneNoteHierarchy {
             foreach ($sec in $nb.SelectNodes('descendant::*[local-name()="Section"]')) {
                 $pagesList = New-Object System.Collections.ArrayList
                 foreach ($pg in $sec.SelectNodes('*[local-name()="Page"]')) {
+                    $lvl = if ($pg.pageLevel) { [int]$pg.pageLevel } else { 1 }
                     [void]$pagesList.Add(@{
                         id = [string]$pg.ID
                         name = [string]$pg.name
                         lastModified = [string]$pg.lastModifiedTime
-                        level = [int]($pg.pageLevel ? $pg.pageLevel : 1)
+                        level = $lvl
                     })
                 }
                 [void]$sectionsList.Add(@{
@@ -651,7 +652,8 @@ function Invoke-OneNotePages {
             })
         }
 
-        Write-Host ("[onenote] returned {0} pages (ids:{1} since:{2})" -f $results.Count, $ids.Count, ($since ? $since.ToString('yyyy-MM-dd') : ''))
+        $sinceStr = if ($since) { $since.ToString('yyyy-MM-dd') } else { '' }
+        Write-Host ("[onenote] returned {0} pages (ids:{1} since:{2})" -f $results.Count, $ids.Count, $sinceStr)
         Send-Json -Response $response -Status 200 -Body @{ ok = $true; count = $results.Count; pages = @($results) }
     }
     catch {
