@@ -601,11 +601,40 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       hitEl.classList.toggle('is-open');
       if (!detail) {
         detail = el('div', { class: 'tdr-hit-detail' });
-        renderMailBody(detail, h.body, h.isHtml); // HTML はサニタイズ描画、プレーンは pre-wrap
+        detail.appendChild(renderMailHeader(h));
+        const bodyHost = el('div', { class: 'tdr-hit-detail-body' });
+        renderMailBody(bodyHost, h.body, h.isHtml); // HTML はサニタイズ描画、プレーンは pre-wrap
+        detail.appendChild(bodyHost);
         hitEl.appendChild(detail);
       } else { detail.hidden = !detail.hidden; }
     });
     return hitEl;
+  }
+
+  /** 参考メール展開時のヘッダ (件名 / 送信日 / From / To / Cc)。 */
+  function renderMailHeader(h: SavedHit): HTMLElement {
+    const fmtDate = (iso: string): string => {
+      const d = new Date(iso); if (isNaN(d.getTime())) return iso || '';
+      const Y = d.getFullYear(), M = d.getMonth() + 1, D = d.getDate();
+      const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
+      return `${Y}-${String(M).padStart(2, '0')}-${String(D).padStart(2, '0')} ${hh}:${mm}`;
+    };
+    const row = (label: string, value: string | string[]): HTMLElement | null => {
+      const v = Array.isArray(value) ? value.filter(Boolean).join(', ') : value;
+      if (!v) return null;
+      return el('div', { class: 'tdr-hit-hdr-row' }, [
+        el('span', { class: 'tdr-hit-hdr-label' }, [label]),
+        el('span', { class: 'tdr-hit-hdr-value' }, [v]),
+      ]);
+    };
+    const rows = [
+      row('件名', h.subject),
+      row('送信日', fmtDate(h.date)),
+      row('From', h.from),
+      row('To', h.to || []),
+      row('Cc', h.cc || []),
+    ].filter((x): x is HTMLElement => x !== null);
+    return el('div', { class: 'tdr-hit-hdr' }, rows);
   }
 
   /** 出典グループ (ヘッダ + リスト) を 1 つ container に追加。 */

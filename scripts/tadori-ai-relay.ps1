@@ -490,8 +490,26 @@ function Invoke-OutlookOpen {
         }
 
         if ($found) {
-            try { $found.Display() } catch { }       # インスペクタを開く
+            try { $found.Display() } catch { }                    # インスペクタを開く
+            # 最前面化: メールのインスペクタを Activate、Outlook 本体も Activate。
+            try { $found.GetInspector.Activate() } catch { }
             try { $ol.ActiveExplorer().Activate() } catch { }
+            # それでも他ウィンドウに隠れるケース用に Win32 SetForegroundWindow を保険で叩く。
+            try {
+                if (-not ('Tadori.Native' -as [type])) {
+                    Add-Type -Namespace Tadori -Name Native -MemberDefinition @'
+                        [System.Runtime.InteropServices.DllImport("user32.dll")]
+                        public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+                        [System.Runtime.InteropServices.DllImport("user32.dll")]
+                        public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@
+                }
+                $hwnd = [System.IntPtr]$found.GetInspector.WindowHandle()
+                if ($hwnd -ne [System.IntPtr]::Zero) {
+                    [void][Tadori.Native]::ShowWindow($hwnd, 9)   # SW_RESTORE = 9
+                    [void][Tadori.Native]::SetForegroundWindow($hwnd)
+                }
+            } catch { }
             Write-Host ("[open] displayed mail id={0}" -f $id)
             Send-Json -Response $response -Status 200 -Body @{ ok = $true; found = $true }
         } else {
