@@ -9,6 +9,8 @@ import { resolveProvider, loadSettings } from '../api/aiSettings';
 import { fetchLatestBuildId } from '../utils/bundleSource';
 import { initUsage } from '../usage/tracker';
 import { applyFontSize } from '../utils/fontSize';
+import { getLease, type LeaseStatus } from '../sync/lease';
+import { startAutoIngest } from '../sync/autoIngest';
 import cssText from '../styles/app.css';
 
 const LAST_BUILD_KEY = 'tadori:last-build';
@@ -49,6 +51,7 @@ export function boot(): void {
   closeBtn.addEventListener('click', () => root.remove());
 
   const userChip = createUserChip(siteUrl);
+  const presenceChip = createPresenceChip(siteUrl);
 
   const topbar = el('div', { class: 'tdr-topbar' }, [
     el('div', { class: 'tdr-brand' }, [
@@ -57,6 +60,7 @@ export function boot(): void {
       el('span', { class: 'sub' }, ['ML ナレッジサーチ']),
     ]),
     el('div', { class: 'tdr-spacer' }),
+    presenceChip,
     userChip,
     moonBtn,
     settBtn,
@@ -66,6 +70,13 @@ export function boot(): void {
   root.append(topbar, createChatPanel(root, siteUrl));
   document.body.appendChild(root);
   applyFontSize();
+
+  // ハートビート + 自動取り込み (Sticky モード) を起動。
+  // - lease.start() で 30 秒毎に Tadori Sync List をハートビート / リース更新
+  // - autoIngest が writer 状態変化を購読し、自分が writer になったら新着メールを取り込み
+  // - relay 未起動なら autoIngest は silently スキップ (実害なし)
+  void getLease(siteUrl).start();
+  startAutoIngest(siteUrl);
 
   // 起動時の更新検知: 前回見たビルドと違えば「更新されました」トースト。
   try {
@@ -97,6 +108,40 @@ async function checkRelayAlive(root: HTMLElement): Promise<void> {
 
 // ログインユーザー表示 (Spira 同様)。アバター(イニシャル) + 名前のチップ。
 // _spPageContextInfo を即時表示し、/_api/web/currentuser で名前を補正する。
+/** トップバーの在席+書き込み担当インジケータ。lease.subscribe で更新される。 */
+function createPresenceChip(siteUrl: string): HTMLElement {
+  const chip = el('div', { class: 'tdr-presence', title: 'クリックで詳細', 'aria-label': '在席状況' }, [
+    el('span', { class: 'ic' }, ['👥']),
+    el('span', { class: 'cnt' }, ['—']),
+    el('span', { class: 'sep' }, ['·']),
+    el('span', { class: 'writer' }, ['…']),
+  ]);
+  const update = (st: LeaseStatus): void => {
+    const cnt = chip.querySelector<HTMLElement>('.cnt');
+    const writer = chip.querySelector<HTMLElement>('.writer');
+    if (cnt) cnt.textContent = String(st.peers.length || (st.holderId ? 1 : 0) || 0);
+    if (writer) {
+      const who = st.holderId || '—';
+      // client-id (c-xxxx) はそのままだと無意味なので、自分は「あなた」、他者は短縮表記
+      const shortWho = who === st.myId ? 'あなた' : (who.length > 10 ? who.slice(0, 8) + '…' : who);
+      writer.textContent = `書込: ${shortWho}`;
+      if (st.isWriter) writer.classList.add('is-me'); else writer.classList.remove('is-me');
+    }
+    // ホバー用 title に詳細
+    const peerList = st.peers.map(p => `${p.id === st.myId ? '◎ ' : '  '}${p.id} (${secsAgo(p.lastSeen)})`).join('\n');
+    chip.title = `在席 ${st.peers.length} 人\n書き込み担当: ${st.holderId || '未確定'}\n\n${peerList}`;
+  };
+  getLease(siteUrl).subscribe(update);
+  return chip;
+}
+
+function secsAgo(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}秒前`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}分前` : `${Math.round(m / 60)}時間前`;
+}
+
 function createUserChip(siteUrl: string): HTMLElement {
   const ctx = (window as unknown as {
     _spPageContextInfo?: { userDisplayName?: string; userEmail?: string; userLoginName?: string };

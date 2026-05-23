@@ -93,14 +93,46 @@ export class SharePointClient {
     return json.Id ?? 0;
   }
 
-  /** リストが無ければ作成し、不足列を追加する (冪等)。新規作成したら true を返す。 */
-  async ensureList(listTitle: string, fields: FieldSpec[]): Promise<boolean> {
+  /** リストが無ければ作成し、不足列を追加する (冪等)。新規作成したら true を返す。
+   *  opts.disableVersioning が true なら List のバージョン履歴を無効化する
+   *  (ハートビート用 List 等、頻繁に同じ行を更新する用途でバージョン履歴が
+   *  無限に膨らむのを防ぐ)。 */
+  async ensureList(listTitle: string, fields: FieldSpec[], opts: { disableVersioning?: boolean } = {}): Promise<boolean> {
     const existed = await this.listExists(listTitle);
     if (!existed) await this.createList(listTitle);
     // 列追加は best-effort (権限不足等で失敗しても致命にしない)。
     try { await this.ensureFields(listTitle, fields); }
     catch (e) { console.warn('[tadori] ensureFields 失敗:', (e as Error).message); }
+    if (opts.disableVersioning) {
+      try { await this.setListVersioning(listTitle, false); }
+      catch (e) { console.warn('[tadori] バージョン無効化失敗:', (e as Error).message); }
+    }
     return !existed;
+  }
+
+  /** List のバージョン履歴を on/off。新規/既存どちらの List にも適用可能。 */
+  private async setListVersioning(listTitle: string, enabled: boolean): Promise<void> {
+    const digest = await this.getFormDigest();
+    const res = await fetch(this.listApi(listTitle), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json;odata=verbose',
+        'Content-Type': 'application/json;odata=verbose',
+        'X-RequestDigest': digest,
+        'X-HTTP-Method': 'MERGE',
+        'If-Match': '*',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        __metadata: { type: 'SP.List' },
+        EnableVersioning: enabled,
+        EnableMinorVersions: enabled,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`setListVersioning HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
   }
 
   private async listExists(listTitle: string): Promise<boolean> {
