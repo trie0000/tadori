@@ -82,6 +82,7 @@ const KEY = {
   ragTopK:             'tadori:rag-topk',
   ragMinScore:         'tadori:rag-min-score',
   ragKeywordWeight:    'tadori:rag-keyword-weight',
+  enterSends:          'tadori:enter-sends',
 } as const;
 
 const DEFAULT_SUFFIX = ':default';
@@ -185,6 +186,8 @@ export interface RuntimeSettings {
   ragMinScore: number;
   /** ハイブリッド検索の重み (0=ベクトルのみ / 1=キーワードのみ)。 */
   ragKeywordWeight: number;
+  /** Enter キー単独で送信するか (true=Enter送信/Shift+Enter改行、false=Ctrl/⌘+Enter送信)。 */
+  enterSends: boolean;
 }
 
 /** provider を解決。開発者モード OFF のときは 'claude' を 'corp' に丸める。 */
@@ -230,6 +233,7 @@ export function loadSettings(): RuntimeSettings {
     ragTopK: Math.min(20, Math.max(1, Number(lsGet(KEY.ragTopK) || '8') || 8)),
     ragMinScore: parseMinScore(lsGet(KEY.ragMinScore)),
     ragKeywordWeight: parseWeight(lsGet(KEY.ragKeywordWeight)),
+    enterSends: lsGet(KEY.enterSends) === '1',
   };
 }
 
@@ -255,6 +259,7 @@ export function saveSettings(s: Partial<RuntimeSettings>): void {
   if (s.ragTopK !== undefined)           lsSet(KEY.ragTopK, String(Math.min(20, Math.max(1, Math.round(s.ragTopK)))));
   if (s.ragMinScore !== undefined)       lsSet(KEY.ragMinScore, String(Math.min(1, Math.max(0, s.ragMinScore))));
   if (s.ragKeywordWeight !== undefined)  lsSet(KEY.ragKeywordWeight, String(Math.min(1, Math.max(0, s.ragKeywordWeight))));
+  if (s.enterSends !== undefined)        lsSet(KEY.enterSends, s.enterSends ? '1' : '');
 }
 
 function parseMinScore(raw: string): number {

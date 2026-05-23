@@ -409,6 +409,22 @@ function buildDisplayPane(pane: HTMLElement, root: HTMLElement): void {
     if (lbl) lbl.textContent = isDark ? 'ダークモード: OFF' : 'ダークモード: ON';
   });
   pane.appendChild(el('div', { style: 'margin-top:var(--s-3)' }, [toggleBtn]));
+
+  // チャットの送信キー切替 (即時保存)。
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, ['チャット送信キー']));
+  const cur = loadSettings().enterSends;
+  const enterRadio = el('input', { type: 'radio', name: 'enter-send', value: 'enter' }) as HTMLInputElement;
+  const ctrlRadio  = el('input', { type: 'radio', name: 'enter-send', value: 'ctrl' }) as HTMLInputElement;
+  if (cur) enterRadio.checked = true; else ctrlRadio.checked = true;
+  const apply = (enterSends: boolean): void => { saveSettings({ enterSends }); toast(root, enterSends ? 'Enter で送信に切替' : '⌘/Ctrl+Enter で送信に切替', 'ok'); };
+  enterRadio.addEventListener('change', () => { if (enterRadio.checked) apply(true); });
+  ctrlRadio.addEventListener('change', () => { if (ctrlRadio.checked) apply(false); });
+  pane.appendChild(el('label', { style: 'display:flex;align-items:center;gap:var(--s-3);margin-top:var(--s-3);cursor:pointer' }, [
+    ctrlRadio, el('span', {}, ['⌘ / Ctrl + Enter で送信 (Enter は改行)']),
+  ]));
+  pane.appendChild(el('label', { style: 'display:flex;align-items:center;gap:var(--s-3);margin-top:var(--s-2);cursor:pointer' }, [
+    enterRadio, el('span', {}, ['Enter で送信 (Shift+Enter で改行)']),
+  ]));
 }
 
 // ─── 診断 ─────────────────────────────────────────────────────────────────────

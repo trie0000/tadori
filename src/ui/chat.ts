@@ -77,6 +77,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   const thread = el('div', { class: 'tdr-thread' });
   const input  = el('textarea', { class: 'tdr-note-input', placeholder: 'メーリングリストについて質問…', rows: '1' });
   const sendBtn = el('button', { class: 'tdr-note-submit', 'aria-label': '送信', html: icons.send(14) });
+  const hintEl = el('div', { class: 'tdr-note-hint' }, ['']);
+  const refreshHint = (): void => {
+    hintEl.textContent = loadSettings().enterSends
+      ? 'Enter で送信 / Shift+Enter で改行'
+      : '⌘+Enter または Ctrl+Enter で送信';
+  };
+  refreshHint();
+  input.addEventListener('focus', refreshHint);
 
   const emptyState = el('div', { class: 'tdr-empty' }, [
     el('div', { class: 'big' }, ['辿り']),
@@ -482,9 +490,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      void submit();
+    if (e.key !== 'Enter' || e.isComposing) return; // IME 変換中は無視
+    const enterSends = loadSettings().enterSends;
+    if (enterSends) {
+      // Enter 単独で送信 / Shift+Enter は改行
+      if (!e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); void submit(); }
+    } else {
+      // ⌘/Ctrl+Enter で送信
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); void submit(); }
     }
   });
   // 生成中は停止、それ以外は送信。
@@ -516,7 +529,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         chipsRow,
         buildModelPicker(),
         el('div', { class: 'tdr-note-form' }, [input, sendBtn]),
-        el('div', { class: 'tdr-note-hint' }, ['⌘+Enter または Ctrl+Enter で送信']),
+        hintEl,
       ]),
     ]),
   ]);
