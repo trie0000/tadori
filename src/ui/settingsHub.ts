@@ -32,7 +32,7 @@ import {
 } from '../search/exclusionRules';
 import { fetchMonthlyTotals, currentUser } from '../usage/tracker';
 
-type SectionId = 'ai' | 'search' | 'exclude' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'resetMail' | 'resetAll';
+type SectionId = 'ai' | 'search' | 'exclude' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'paSetup' | 'about' | 'resetMail' | 'resetAll';
 
 // メニュー構成は固定 (Spira と同じグループ流儀)。むやみに名前を変えないこと。
 const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[] = [
@@ -44,11 +44,13 @@ const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[]
     { id: 'search', label: '検索' },
     { id: 'exclude',label: '除外ルール' },
     { id: 'ingest', label: '取り込み' },
+    { id: 'paSetup',label: 'PA セットアップ' },
     { id: 'diag',   label: '診断' },
     { id: 'usage',  label: '利用料' },
   ] },
   { title: '運用', items: [
-    { id: 'dev', label: '開発者モード' },
+    { id: 'dev',   label: '開発者モード' },
+    { id: 'about', label: 'Tadori について' },
   ] },
   { title: '危険ゾーン', items: [
     { id: 'resetMail', label: '取り込みメールを全削除' },
@@ -82,6 +84,8 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
       case 'search':  buildSearchPane(pane, draft); break;
       case 'exclude': buildExcludePane(pane, root); break;
       case 'ingest':  buildIngestPane(pane, draft, root, siteUrl); break;
+      case 'paSetup': buildPaSetupPane(pane, draft, root, siteUrl); break;
+      case 'about':   buildAboutPane(pane, root); break;
       case 'display': buildDisplayPane(pane, root); break;
       case 'diag':    buildDiagPane(pane, draft, root, siteUrl); break;
       case 'usage':   buildUsagePane(pane, root); break;
@@ -738,6 +742,210 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
   }
 
   pane.append(loadBtn, treeEl, el('div', { style: 'display:flex;gap:var(--s-3);align-items:center' }, [runBtn, stopBtn]), bar, status);
+}
+
+// ─── PA セットアップ ─────────────────────────────────────────────────────────
+// Power Automate で新着メールを Tadori 受信メール List に投入する手順を案内。
+// Spira の同名ペインと同じ作法 (順序付きステップ + コピー可能フィールド)。
+
+function buildPaSetupPane(pane: HTMLElement, draft: RuntimeSettings, _root: HTMLElement, siteUrl: string): void {
+  paneHead(pane, 'PA セットアップ', '新着メールを Tadori が自動で拾えるようにするための Power Automate の設定手順です。手動の Outlook 取り込みボタンを毎回押さなくても、PA がメールを List に書き込み → Tadori 自動取り込みが拾う流れになります。');
+
+  const listName = draft.listTitle || 'Tadori 受信メール';
+
+  // コピー可能なテキストフィールドのヘルパ (Spira と同じ作法)
+  const copyable = (label: string, value: string, hint?: string): HTMLElement => {
+    const inp = el('input', { class: 'tdr-input', readonly: 'readonly', value, style: 'font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLInputElement;
+    const btn = el('button', { class: 'tdr-btn', style: 'flex-shrink:0' }, [el('span', { html: icons.copy(14) }), 'コピー']);
+    btn.addEventListener('click', () => {
+      void navigator.clipboard?.writeText(value).then(() => {
+        btn.replaceChildren(el('span', { html: icons.check(14) }), 'コピー済');
+        setTimeout(() => btn.replaceChildren(el('span', { html: icons.copy(14) }), 'コピー'), 1500);
+      });
+    });
+    return el('div', { style: 'margin-bottom:var(--s-3)' }, [
+      el('label', { class: 'tdr-label' }, [label]),
+      el('div', { style: 'display:flex;gap:var(--s-2)' }, [inp, btn]),
+      ...(hint ? [el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-1)' }, [hint])] : []),
+    ]);
+  };
+
+  const step = (n: number, title: string, body: HTMLElement[]): HTMLElement => {
+    return el('div', { style: 'display:flex;gap:var(--s-4);margin-bottom:var(--s-5)' }, [
+      el('div', { style: 'flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:flex;align-items:center;justify-content:center;font-weight:700' }, [String(n)]),
+      el('div', { style: 'flex:1;min-width:0' }, [
+        el('div', { style: 'font-weight:600;margin-bottom:var(--s-2)' }, [title]),
+        ...body,
+      ]),
+    ]);
+  };
+
+  // 各種フィールド名 (PA から書き込む列)
+  const colMap: Array<{ name: string; from: string }> = [
+    { name: 'Title',        from: '件名 (Subject)' },
+    { name: 'From',         from: '送信者アドレス' },
+    { name: 'ToAddrs',      from: '宛先一覧 (改行区切り)' },
+    { name: 'CcAddrs',      from: 'Cc 一覧 (改行区切り)' },
+    { name: 'ReceivedTime', from: '受信日時 (ISO 8601)' },
+    { name: 'MessageId',    from: 'Internet-Message-Id (重複排除キー)' },
+    { name: 'Body',         from: '本文 (テキストまたは HTML)' },
+    { name: 'IsHtml',       from: 'HTML 形式なら true' },
+  ];
+  const mapTable = el('table', { style: 'width:100%;border-collapse:collapse;font-size:var(--fs-sm);margin-top:var(--s-2)' }, [
+    el('thead', {}, [
+      el('tr', { style: 'background:var(--paper-2);border-bottom:1px solid var(--line)' }, [
+        el('th', { style: 'text-align:left;padding:6px 10px;font-weight:600' }, ['列名 (List 側)']),
+        el('th', { style: 'text-align:left;padding:6px 10px;font-weight:600' }, ['PA で渡す内容']),
+      ]),
+    ]),
+    el('tbody', {},
+      colMap.map(c => el('tr', { style: 'border-bottom:1px solid var(--line)' }, [
+        el('td', { style: 'padding:6px 10px;font-family:var(--font-mono);color:var(--accent-strong)' }, [c.name]),
+        el('td', { style: 'padding:6px 10px;color:var(--ink-3)' }, [c.from]),
+      ])),
+    ),
+  ]);
+
+  pane.append(
+    step(1, 'Power Automate を開く', [
+      el('p', { class: 'tdr-hint', style: 'margin:0' }, ['ブラウザで Power Automate (Microsoft 365) を開いて「マイ フロー」→「新しいフロー」→「自動化したクラウド フロー」を選択します。']),
+    ]),
+    step(2, 'トリガを設定', [
+      el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-2)' }, ['「Outlook.com / Office 365 Outlook」 → 「新しいメールが届いたとき (V3)」を選択。受信フォルダ・差出人・件名フィルタなどを指定 (例: ML アドレス宛のみ)。']),
+    ]),
+    step(3, 'アクション: SharePoint「項目の作成」', [
+      el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-3)' }, ['アクション「項目の作成 (Create item)」を追加し、以下を指定します:']),
+      copyable('サイト URL', siteUrl, 'PA の「サイトのアドレス」にこの URL をそのまま貼ります。'),
+      copyable('List 名', listName, 'PA の「リスト名」のドロップダウンに表示されない時はこの文字列を直接入力してください (初回起動時に自動作成されます)。'),
+    ]),
+    step(4, 'フィールドマッピング', [
+      el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-2)' }, ['PA のフィールドに以下を割り当てます:']),
+      mapTable,
+      el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-3)' }, ['※ MessageId はメールの一意 ID (Internet-Message-Id ヘッダ)。同じメールを 2 度取り込まないための重複排除キーなので必須。']),
+    ]),
+    step(5, 'フローを保存して有効化', [
+      el('p', { class: 'tdr-hint', style: 'margin:0' }, ['右上の「保存」→「テスト」で新着メールを 1 件テスト → SharePoint で List 行が作られていれば成功。以降、新着が来るたびに自動で投入され、Tadori 側の自動取り込みが拾います。']),
+    ]),
+    step(6, 'Tadori 側の確認', [
+      el('p', { class: 'tdr-hint', style: 'margin:0' }, ['Tadori のトップバー右側の在席チップで「書込: ◯◯」担当が決まっており、relay (PowerShell) が起動していれば、List に入った新着メールは自動で embed → SharePoint セグメントへ書き込まれます。明示的にボタンを押す必要はありません。']),
+    ]),
+  );
+
+  pane.appendChild(el('div', { class: 'tdr-hint', style: 'padding:var(--s-4);background:var(--accent-soft);border-radius:var(--r-2);margin-top:var(--s-3);color:var(--accent-strong)' }, [
+    'ℹ️ List がまだ存在しない場合は、Tadori を一度起動するだけで自動作成されます。PA 側で「リスト名のドロップダウンが空」になっていたら、まず Tadori を再起動してから PA を設定してください。',
+  ]));
+}
+
+// ─── Tadori について (技術仕様) ───────────────────────────────────────────
+// Spira の「Spira について」と同じ作法で、アーキテクチャ概要と主要 ADR を提示。
+
+function buildAboutPane(pane: HTMLElement, _root: HTMLElement): void {
+  paneHead(pane, 'Tadori について', 'Tadori (辿り) はメール + OneNote を意味検索 + RAG で辿るブックマークレット型ツールです。');
+
+  const buildId = (window as unknown as { __TADORI_BUILD_ID__?: string }).__TADORI_BUILD_ID__ || '(不明)';
+
+  const section = (title: string, body: HTMLElement | HTMLElement[]): HTMLElement => {
+    return el('div', { style: 'margin-bottom:var(--s-6)' }, [
+      el('p', { class: 'tdr-pane-title', style: 'margin-bottom:var(--s-2)' }, [title]),
+      ...(Array.isArray(body) ? body : [body]),
+    ]);
+  };
+
+  pane.appendChild(section('概要',
+    el('p', { class: 'tdr-hint' }, [
+      'メーリングリスト等の過去メールと OneNote ページをまとめて意味検索 (ベクトル類似度 + キーワード一致) し、AI が出典付きで回答するツール。回答内容は OneNote の任意ページに「Tadori 追記」として書き戻せます。委任先 M365 制約下で動作 (独立サーバ不要)。',
+    ]),
+  ));
+
+  pane.appendChild(section('アーキテクチャ', [
+    el('pre', { style: 'background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);font-size:var(--fs-xs);overflow-x:auto;line-height:1.5' }, [
+`[Outlook] (各メンバの業務 PC)
+   │ COM (relay 経由)
+   ▼
+[ローカル relay (PowerShell)]
+   ├ Outlook COM → メール取り込み
+   ├ OneNote COM → ページ取り込み / 追記 / 更新
+   └ Azure OpenAI / Anthropic ゲートウェイ (チャット + 埋め込み)
+
+[ブラウザ (bookmarklet)]
+   ├ ベクトル DB (in-memory + IndexedDB cache)
+   ├ ハイブリッド検索 (cosine + 文字 bigram)
+   ├ LLM クエリルータ → 意味 + 完全一致を自動分担
+   ├ RAG 回答生成 (SSE ストリーミング + Markdown レンダ)
+   └ Sticky モード (ハートビート + 自動取り込み)
+   ↑↓ Cookie 認証 SP REST
+[SharePoint ドキュメントライブラリ / Shared Documents/Tadori/]
+   ├ manifest.json (世代管理)
+   └ seg-NNNNN.json (追記専用セグメント、≤100 件)
+[SharePoint List]
+   ├ Tadori 受信メール (PA からの投入バッファ)
+   ├ Tadori Sync (在席ハートビート + 書き込みリース)
+   └ Tadori 利用料 (LLM コスト集計)`,
+    ]),
+  ]));
+
+  pane.appendChild(section('データフロー', el('ul', { style: 'margin:0;padding-left:var(--s-6)' }, [
+    el('li', {}, ['取り込み: relay COM か PA → List → 自動取り込み (writer 担当のみ) → 埋め込み (件名 + 本文) → SharePoint セグメントへ書き込み → 全員へ配布']),
+    el('li', {}, ['検索: 質問 → LLM クエリルータ (keyword + 意味分担) → ベクトル DB ハイブリッド検索 → 同一 OneNote ページのチャンク重複排除 → リランカ (任意)']),
+    el('li', {}, ['回答: Top-K の参照を context に LLM が出典 [n] 付き Markdown 生成 → 質問末尾でフォローアップ案も生成']),
+    el('li', {}, ['追記: AI が OneNote ページ末尾に「Tadori 追記」Outline を新規挿入 (バナー + 見出し + 本文 + 出典フッター)。バナーが識別子になり既存追記の更新も可能']),
+  ])));
+
+  pane.appendChild(section('SharePoint List 構成', el('table', { style: 'width:100%;border-collapse:collapse;font-size:var(--fs-sm)' }, [
+    el('thead', {}, [
+      el('tr', { style: 'background:var(--paper-2);border-bottom:1px solid var(--line)' }, [
+        el('th', { style: 'text-align:left;padding:6px 10px' }, ['リスト名']),
+        el('th', { style: 'text-align:left;padding:6px 10px' }, ['用途']),
+        el('th', { style: 'text-align:left;padding:6px 10px' }, ['作成主体']),
+      ]),
+    ]),
+    el('tbody', {}, [
+      el('tr', { style: 'border-bottom:1px solid var(--line)' }, [
+        el('td', { style: 'padding:6px 10px;font-family:var(--font-mono);color:var(--accent-strong)' }, ['Tadori 受信メール']),
+        el('td', { style: 'padding:6px 10px' }, ['PA からの新着メール投入先 (Tadori が自動取り込み)']),
+        el('td', { style: 'padding:6px 10px;color:var(--ink-3)' }, ['Tadori 起動時に自動']),
+      ]),
+      el('tr', { style: 'border-bottom:1px solid var(--line)' }, [
+        el('td', { style: 'padding:6px 10px;font-family:var(--font-mono);color:var(--accent-strong)' }, ['Tadori Sync']),
+        el('td', { style: 'padding:6px 10px' }, ['在席ハートビート + 書き込みリース (writer 単一化)']),
+        el('td', { style: 'padding:6px 10px;color:var(--ink-3)' }, ['Tadori 起動時に自動']),
+      ]),
+      el('tr', { style: 'border-bottom:1px solid var(--line)' }, [
+        el('td', { style: 'padding:6px 10px;font-family:var(--font-mono);color:var(--accent-strong)' }, ['Tadori 利用料']),
+        el('td', { style: 'padding:6px 10px' }, ['月次 LLM コスト集計 (ユーザ別)']),
+        el('td', { style: 'padding:6px 10px;color:var(--ink-3)' }, ['Tadori 起動時に自動']),
+      ]),
+    ]),
+  ])));
+
+  pane.appendChild(section('主要 ADR (Notion 設計ドキュメント参照)', el('ul', { style: 'margin:0;padding-left:var(--s-6)' }, [
+    el('li', {}, ['ADR-001: 独立ベクトル DB サーバを立てない → クライアントサイドベクトル検索']),
+    el('li', {}, ['ADR-007: 認証は Cookie 再利用 (Azure AD アプリ登録不可のため)']),
+    el('li', {}, ['ADR-010 / 011: ベクトル DB 本体は relay の SQLite → SharePoint セグメントで配布']),
+    el('li', {}, ['ADR-012: 書き込みは List リースで単一化 (同時 1 人、輪番)']),
+    el('li', {}, ['ADR-013: OneNote を取り込み + 追記対象に拡張 (relay COM 経由)']),
+    el('li', {}, ['ADR-014: AI 追記候補は B 方式 (確認 1 クリック) で書き込み']),
+  ])));
+
+  pane.appendChild(section('制約', el('ul', { style: 'margin:0;padding-left:var(--s-6)' }, [
+    el('li', {}, ['Azure AD アプリ登録不可 → Cookie / MSAL 公開クライアントのみ']),
+    el('li', {}, ['外部 SaaS への送信不可 → 社内 Azure OpenAI 経由 (開発者モードのみ Claude/Voyage 直叩き可)']),
+    el('li', {}, ['Outlook の「オフラインに保持するメール」設定外のメールは取得不可 (キャッシュ依存)']),
+    el('li', {}, ['npm 不可 / Python 不可 → JS/TS のみ、dist は git にコミット']),
+  ])));
+
+  pane.appendChild(section('ビルド情報',
+    el('p', { class: 'tdr-hint', style: 'font-family:var(--font-mono);font-size:var(--fs-xs)' }, [buildId]),
+  ));
+
+  pane.appendChild(el('div', { class: 'tdr-hint', style: 'padding:var(--s-4);background:var(--paper-2);border-radius:var(--r-2);margin-top:var(--s-3)' }, [
+    'リポジトリ: ',
+    (() => {
+      const a = el('a', { href: 'https://github.com/trie0000/tadori', target: '_blank', style: 'color:var(--accent-strong)' }, ['github.com/trie0000/tadori']);
+      return a;
+    })(),
+    ' (社内 private)',
+  ]));
 }
 
 // ─── 表示 ─────────────────────────────────────────────────────────────────────

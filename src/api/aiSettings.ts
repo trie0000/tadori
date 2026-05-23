@@ -232,7 +232,7 @@ export function loadSettings(): RuntimeSettings {
     voyageApiKey: lsGet(KEY.voyageKey),
     voyageModel: lsGet(KEY.voyageModel) || DEFAULT_VOYAGE_MODEL,
 
-    listTitle: lsGet(KEY.listTitle) || '受信メールリスト',
+    listTitle: lsGet(KEY.listTitle) || 'Tadori 受信メール',
     mlAddresses: parseAddressList(lsGet(KEY.mlAddresses)),
     ingestIntervalSec: Number(lsGet(KEY.ingestIntervalSec) || '30') || 30,
     embedConcurrency: Math.min(10, Math.max(1, Number(lsGet(KEY.embedConcurrency) || '3') || 3)),
