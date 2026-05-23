@@ -144,14 +144,14 @@ const ONENOTE_APPEND_INSTRUCTIONS = [
   'OneNote ページへの追記の意図が読み取れる場合のみ、回答の本文と @@SUGGEST@@ の間 (空行で区切る) に',
   '次の 1 行を出力すること:',
   '',
-  '@@ONENOTE_APPEND@@ {"pageId":"<id>","heading":"<40字以内>","body":"<MarkdownでOneNoteに追記する本文。改行は \\\\n でエスケープ>"}',
+  '@@ONENOTE_APPEND@@ {"pageId":"<id>","heading":"<40字以内>","body":"<MarkdownでOneNoteに追記する本文。改行は \\n (バックスラッシュ + n) で JSON エスケープする>"}',
   '',
   '- pageId は後述の「OneNote 追記候補ページ一覧」から最も適切な 1 件を選ぶ:',
   '  1) ユーザが特定ページを名指ししていればそのページ',
   '  2) なければ「現在開いているページ」',
   '  3) どちらもなければ内容に最も関係する 1 件',
   '- heading は短い見出し (例: "FAQ: 春の懇親会の詳細")。',
-  '- body は OneNote にそのまま貼られる Markdown。改行は \\\\n (JSON エスケープ済み) で表現する。',
+  '- body は OneNote にそのまま貼られる Markdown。改行は \\n (バックスラッシュ + n、JSON 文字列の正規エスケープ) で表現する。',
   '- 質問に追記の意図が無い場合は出力しないこと (通常の回答だけ返す)。',
 ].join('\n');
 
@@ -198,10 +198,13 @@ function makeStreamParser(
     appendEmitted = true;
     try {
       const obj = JSON.parse(appendRaw.trim()) as { pageId?: string; heading?: string; body?: string };
+      // LLM が誤って "\\n" を出力した場合の保険: 残ったリテラル "\n" (バックスラッシュ+n) を実改行に。
+      // JSON.parse が正しい "\n" を実改行へ変換した後にこの置換が走るので、二重変換は起きない。
+      const unescapeNl = (s: string): string => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
       onAppendSuggestion({
         pageId: String(obj.pageId ?? ''),
-        heading: String(obj.heading ?? ''),
-        body: String(obj.body ?? ''),
+        heading: unescapeNl(String(obj.heading ?? '')),
+        body: unescapeNl(String(obj.body ?? '')),
       });
     } catch { /* JSON 不正は無視 (回答自体は通常通り表示) */ }
     appendRaw = '';
