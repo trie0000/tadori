@@ -732,13 +732,16 @@ function Invoke-OneNoteAppend {
     $response = $Context.Response
     $req = $Context.Request
 
-    # JSON body 読込
-    $reader = New-Object System.IO.StreamReader($req.InputStream, $req.ContentEncoding)
+    # JSON body 読込。Content-Type に charset 未指定だと $req.ContentEncoding が Shift-JIS や
+    # null になり日本語が壊れる。クライアントは常に UTF-8 で送るので強制 UTF-8。
+    $reader = New-Object System.IO.StreamReader($req.InputStream, [System.Text.Encoding]::UTF8)
     $bodyText = $reader.ReadToEnd()
     $reader.Close()
     $payload = $null
     try { $payload = $bodyText | ConvertFrom-Json } catch {
-        Send-Error -Response $response -Status 400 -Code 'bad_json' -Detail 'JSON ボディを解釈できませんでした'; return
+        Write-Host ("[onenote] bad json body: {0}" -f $bodyText.Substring(0, [Math]::Min(300, $bodyText.Length)))
+        Send-Error -Response $response -Status 400 -Code 'bad_json' -Detail ("JSON ボディを解釈できませんでした: " + $_.Exception.Message)
+        return
     }
     $pageId  = [string]$payload.pageId
     $heading = [string]$payload.heading

@@ -129,7 +129,7 @@ export async function appendOneNotePage(
   if (!args.pageId) throw new Error('pageId がありません');
   const res = await fetch(`${trim(relayBaseUrl)}/tadori/onenote/append`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify(args),
     signal,
   });
