@@ -121,10 +121,12 @@ export function pagesToIngestMails(pages: OneNotePage[]): IngestMail[] {
  *  level: ネスト深さ (0 = トップ。Markdown の半角スペース 2 つで +1) */
 export interface AppendBlock { type: 'h' | 'p' | 'ul' | 'ol' | 'q' | 'blank'; text: string; level?: number; }
 
-/** 既存 OneNote ページの末尾に新規 Outline として追記する (relay 経由)。 */
+/** 既存 OneNote ページの末尾に新規 Outline として追記する (relay 経由)。
+ *  user を渡すと relay 側で「Tadori 追記 by user [日時]」というバナー行が
+ *  見出しの直前に挿入される (誰が追記したかをノート単独で識別できるように)。 */
 export async function appendOneNotePage(
   relayBaseUrl: string,
-  args: { pageId: string; heading?: string; blocks: AppendBlock[] },
+  args: { pageId: string; heading?: string; blocks: AppendBlock[]; user?: string },
   signal?: AbortSignal,
 ): Promise<void> {
   if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です');

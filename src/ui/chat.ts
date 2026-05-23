@@ -15,6 +15,7 @@ import { isDeveloperMode } from '../utils/devMode';
 import { renderMarkdown } from '../lib/markdown';
 import { openMailInOutlook } from '../outlook/import';
 import { openOneNotePage, appendOneNotePage, markdownToBlocks, fetchCurrentOneNotePageId, fetchOneNoteLinks } from '../onenote/import';
+import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
 import { openModal } from './modal';
@@ -538,14 +539,19 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       })();
     }
 
+    const opUser = currentUser();
+    const escapeText = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
     const preview = el('div', { class: 'tdr-onenote-preview', style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);background:var(--paper-2);min-height:200px;max-height:300px;overflow:auto;font-size:var(--fs-sm);line-height:1.7' });
     const renderPreview = (): void => {
       const h = headingInput.value.trim();
       const md = bodyArea.value;
       const ts = new Date();
       const stamp = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
-      const headingHtml = h ? `<div style="font-weight:700;margin-bottom:6px">${h.replace(/&/g, '&amp;').replace(/</g, '&lt;')} <span style="color:#888;font-size:11px;font-weight:400">[${stamp}]</span></div>` : '';
-      preview.innerHTML = headingHtml + renderMarkdown(md);
+      // Tadori が誰の操作で追記したかを示すバナー (OneNote 側でも同じ書式で書き込まれる)
+      const bannerHtml = `<div style="color:#888;font-size:11px;margin-bottom:4px"><b>[Tadori 追記]</b> by ${escapeText(opUser)} [${stamp}]</div>`;
+      const headingHtml = h ? `<div style="font-weight:700;margin-bottom:6px">${escapeText(h)}</div>` : '';
+      preview.innerHTML = bannerHtml + headingHtml + renderMarkdown(md);
     };
     headingInput.addEventListener('input', renderPreview);
     bodyArea.addEventListener('input', renderPreview);
@@ -583,7 +589,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       confirmBtn.disabled = true; cancelBtn.disabled = true;
       confirmBtn.textContent = '追記中…';
       try {
-        await appendOneNotePage(relayBaseUrl, { pageId, heading, blocks });
+        await appendOneNotePage(relayBaseUrl, { pageId, heading, blocks, user: opUser });
         toast(root, 'OneNote に追記しました', 'ok');
         handle.close();
       } catch (e) {

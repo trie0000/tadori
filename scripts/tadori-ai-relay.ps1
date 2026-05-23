@@ -789,6 +789,7 @@ function Invoke-OneNoteAppend {
     }
     $pageId  = [string]$payload.pageId
     $heading = [string]$payload.heading
+    $userId  = [string]$payload.user
     $blocks  = @($payload.blocks)
     if (-not $pageId) { Send-Error -Response $response -Status 400 -Code 'bad_request' -Detail 'pageId が必要です'; return }
     if (-not $heading -and (-not $blocks -or $blocks.Count -eq 0)) {
@@ -846,11 +847,16 @@ function Invoke-OneNoteAppend {
             return $oe
         }
 
-        # 見出しは <b> で 1 行目に (level=0 固定)
+        # Tadori 追記の出所バナーを最初に置く: 誰が何時に追記したかをノート単独で識別できるように。
+        $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        $userSafe = if ($userId) { ($userId -replace '&', '&amp;') -replace '<', '&lt;' -replace '>', '&gt;' } else { '(不明)' }
+        $bannerHtml = "<span style=`"color:#888;font-size:9pt`"><b>[Tadori 追記]</b> by {0} [{1}]</span>" -f $userSafe, $stamp
+        [void]$rootChildren.AppendChild((New-OE $doc $oneNs $bannerHtml))
+
+        # 見出しは <b> で 2 行目に (level=0 固定)
         if ($heading) {
             $safe = ($heading -replace '&', '&amp;') -replace '<', '&lt;' -replace '>', '&gt;'
-            $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-            $hHtml = "<b>{0}</b> <span style=`"color:#888;font-size:9pt`">[{1}]</span>" -f $safe, $stamp
+            $hHtml = "<b>{0}</b>" -f $safe
             [void]$rootChildren.AppendChild((New-OE $doc $oneNs $hHtml))
         }
 
