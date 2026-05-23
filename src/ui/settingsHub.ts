@@ -22,9 +22,15 @@ import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { ingestToSegments } from '../db/writer';
 import { getEngine, wipeImportedMails } from '../db/engine';
+import { getFontSize, setFontSize } from '../utils/fontSize';
+import {
+  loadRules as loadExclusionRules, addRule as addExclusionRule, deleteRule as deleteExclusionRule,
+  updateRule as updateExclusionRule, FIELD_LABELS as EXCLUDE_FIELD_LABELS,
+  type ExclusionField, type ExclusionRule,
+} from '../search/exclusionRules';
 import { fetchMonthlyTotals, currentUser } from '../usage/tracker';
 
-type SectionId = 'ai' | 'search' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'resetMail' | 'resetAll';
+type SectionId = 'ai' | 'search' | 'exclude' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'resetMail' | 'resetAll';
 
 // メニュー構成は固定 (Spira と同じグループ流儀)。むやみに名前を変えないこと。
 const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[] = [
@@ -34,6 +40,7 @@ const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[]
   { title: 'AI / 自動化', items: [
     { id: 'ai',     label: 'AI 設定' },
     { id: 'search', label: '検索' },
+    { id: 'exclude',label: '除外ルール' },
     { id: 'ingest', label: '取り込み' },
     { id: 'diag',   label: '診断' },
     { id: 'usage',  label: '利用料' },
@@ -71,6 +78,7 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
     switch (id) {
       case 'ai':      buildAiPane(pane, draft); break;
       case 'search':  buildSearchPane(pane, draft); break;
+      case 'exclude': buildExcludePane(pane, root); break;
       case 'ingest':  buildIngestPane(pane, draft, root, siteUrl); break;
       case 'display': buildDisplayPane(pane, root); break;
       case 'diag':    buildDiagPane(pane, draft, root, siteUrl); break;
@@ -237,6 +245,65 @@ function buildSearchPane(pane: HTMLElement, draft: RuntimeSettings): void {
     el('span', { class: 'tdr-hint' }, ['キーワード']),
     wLabel,
   ]));
+}
+
+// ─── 除外ルール ─────────────────────────────────────────────────────────────
+
+function buildExcludePane(pane: HTMLElement, root: HTMLElement): void {
+  paneHead(pane, '除外ルール', '検索結果から除外したいメールの条件を指定します (件名 / 送信者 / To / Cc / 本文 の部分一致、大文字小文字無視)。Outlook の振り分けルールに近い動作です。1 つでも一致すると除外されます。');
+
+  const list = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-3);margin-top:var(--s-3)' });
+
+  function render(): void {
+    list.replaceChildren();
+    const rules = loadExclusionRules();
+    if (rules.length === 0) {
+      list.appendChild(el('div', { class: 'tdr-hint' }, ['ルールはまだありません。下の「+ ルール追加」から登録してください。']));
+    } else {
+      for (const r of rules) list.appendChild(renderRow(r));
+    }
+  }
+
+  function renderRow(r: ExclusionRule): HTMLElement {
+    const enabled = r.enabled !== false;
+    const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cb.checked = enabled;
+    cb.addEventListener('change', () => { updateExclusionRule(r.id, { enabled: cb.checked }); });
+
+    const fieldSel = el('select', { class: 'tdr-input', style: 'max-width:120px' }) as HTMLSelectElement;
+    for (const f of Object.keys(EXCLUDE_FIELD_LABELS) as ExclusionField[]) {
+      const o = document.createElement('option');
+      o.value = f; o.textContent = EXCLUDE_FIELD_LABELS[f];
+      if (f === r.field) o.selected = true;
+      fieldSel.appendChild(o);
+    }
+    fieldSel.addEventListener('change', () => { updateExclusionRule(r.id, { field: fieldSel.value as ExclusionField }); });
+
+    const valueInp = el('input', { class: 'tdr-input', value: r.value, placeholder: '部分一致する文字列', style: 'flex:1' }) as HTMLInputElement;
+    valueInp.addEventListener('change', () => { updateExclusionRule(r.id, { value: valueInp.value }); });
+
+    const del = el('button', { class: 'tdr-iconbtn', 'aria-label': 'ルールを削除', title: '削除', html: icons.trash(14) });
+    del.addEventListener('click', () => {
+      confirmModal({
+        root, title: 'ルールを削除', primaryLabel: '削除', primaryVariant: 'danger',
+        message: `${EXCLUDE_FIELD_LABELS[r.field]} に「${r.value}」を含むメールを除外、というルールを削除しますか?`,
+        onConfirm: () => { deleteExclusionRule(r.id); render(); },
+      });
+    });
+
+    return el('div', { style: 'display:flex;align-items:center;gap:var(--s-3)' }, [cb, fieldSel, valueInp, del]);
+  }
+
+  const addBtn = el('button', { class: 'tdr-btn', style: 'margin-top:var(--s-5)' }, [
+    el('span', { html: icons.plus(14) }), 'ルール追加',
+  ]);
+  addBtn.addEventListener('click', () => {
+    addExclusionRule({ field: 'subject', value: '', enabled: true });
+    render();
+  });
+
+  pane.append(list, addBtn);
+  render();
 }
 
 // ─── 取り込み ─────────────────────────────────────────────────────────────────
@@ -409,6 +476,21 @@ function buildDisplayPane(pane: HTMLElement, root: HTMLElement): void {
     if (lbl) lbl.textContent = isDark ? 'ダークモード: OFF' : 'ダークモード: ON';
   });
   pane.appendChild(el('div', { style: 'margin-top:var(--s-3)' }, [toggleBtn]));
+
+  // 文字サイズ (小 / 中 / 大) — 即時反映。
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, ['文字サイズ']));
+  const sizes: { v: 'sm' | 'md' | 'lg'; label: string }[] = [
+    { v: 'sm', label: '小' }, { v: 'md', label: '中 (既定)' }, { v: 'lg', label: '大' },
+  ];
+  const curSize = getFontSize();
+  const sizeRow = el('div', { style: 'display:flex;gap:var(--s-5);margin-top:var(--s-3)' });
+  for (const s of sizes) {
+    const r = el('input', { type: 'radio', name: 'tdr-font-size', value: s.v }) as HTMLInputElement;
+    if (s.v === curSize) r.checked = true;
+    r.addEventListener('change', () => { if (r.checked) setFontSize(s.v); });
+    sizeRow.appendChild(el('label', { style: 'display:inline-flex;align-items:center;gap:var(--s-2);cursor:pointer' }, [r, el('span', {}, [s.label])]));
+  }
+  pane.appendChild(sizeRow);
 
   // チャットの送信キー切替 (即時保存)。
   pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, ['チャット送信キー']));

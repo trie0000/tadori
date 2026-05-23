@@ -8,6 +8,7 @@ import { toast } from './toast';
 import { resolveProvider, loadSettings } from '../api/aiSettings';
 import { fetchLatestBuildId } from '../utils/bundleSource';
 import { initUsage } from '../usage/tracker';
+import { applyFontSize } from '../utils/fontSize';
 import cssText from '../styles/app.css';
 
 const LAST_BUILD_KEY = 'tadori:last-build';
@@ -64,6 +65,7 @@ export function boot(): void {
 
   root.append(topbar, createChatPanel(root, siteUrl));
   document.body.appendChild(root);
+  applyFontSize();
 
   // 起動時の更新検知: 前回見たビルドと違えば「更新されました」トースト。
   try {

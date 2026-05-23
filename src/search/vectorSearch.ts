@@ -12,6 +12,8 @@ export interface MailHit {
   conversationId: string;
   subject: string;
   from: string;
+  to: string[];
+  cc: string[];
   date: string;
   body: string;
   isHtml: boolean;
@@ -25,6 +27,8 @@ function toHit(record: MailRecord, score: number): MailHit {
     conversationId: record.conversationId,
     subject: record.subject,
     from: record.from,
+    to: record.to,
+    cc: record.cc,
     date: record.date,
     body: record.body,
     isHtml: record.isHtml,

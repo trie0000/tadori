@@ -6,6 +6,7 @@ import { el } from '../lib/dom';
 import { icons } from './icons';
 import { toast } from './toast';
 import { searchVectors, getThread } from '../search/vectorSearch';
+import { loadRules, matchesAnyRule } from '../search/exclusionRules';
 import { htmlToText, renderMailBody } from '../lib/mailhtml';
 import { cleanBody } from '../lib/mailtext';
 import { generateAnswer, type RagSource, type ChatHistoryMsg } from '../rag/client';
@@ -377,9 +378,12 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       getHits: async () => {
         const s = loadSettings();
         const raw = await searchVectors(q, s, siteUrl, s.ragTopK);
+        // 除外ルール (件名/送信者/To/Cc/本文 の部分一致) で先に弾く。
+        const rules = loadRules();
+        const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;
         // スコアしきい値で足切り。全部下回ったら最良 1 件だけ残す (取りこぼし防止)。
-        let filtered = raw.filter(h => h.score >= s.ragMinScore);
-        if (filtered.length === 0 && raw.length > 0) filtered = [raw[0]];
+        let filtered = afterExclude.filter(h => h.score >= s.ragMinScore);
+        if (filtered.length === 0 && afterExclude.length > 0) filtered = [afterExclude[0]];
         return filtered as SavedHit[];
       },
     });

@@ -7,6 +7,8 @@ export interface SavedHit {
   conversationId: string;
   subject: string;
   from: string;
+  to: string[];
+  cc: string[];
   date: string;
   body: string;
   isHtml: boolean;
