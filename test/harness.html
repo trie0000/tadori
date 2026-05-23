@@ -141,6 +141,23 @@ function sseResponse(fullText) {
 }
 const MOCK_ANSWER = 'TITLE: 春の懇親会の詳細\n\n## 春の懇親会について\n\n- **日時**: 5 月 23 日(金) 18:30〜 [1]\n- **場所**: 本社 10F ラウンジ [1]\n- **会費**: 3,000 円 (当日受付) [1]\n\n出欠は **5 月 16 日まで** にメールで返信してください [1][2]。\n\n> 当日は軽食とドリンクを用意しています。\n\n@@SUGGEST@@ 会費はいくら? || 場所はどこ? || 出欠の締め切りは?';
 
+// 質問が「OneNote」「メモ」などを含む場合、@@ONENOTE_APPEND@@ も出すバリエーション。
+const MOCK_ANSWER_WITH_APPEND = 'TITLE: 春の懇親会の詳細\n\n## 春の懇親会について\n\n- **日時**: 5 月 23 日(金) 18:30〜 [1]\n- **場所**: 本社 10F ラウンジ [1]\n- **会費**: 3,000 円 (当日受付) [1]\n\n出欠は **5 月 16 日まで** にメールで返信してください [1][2]。\n\n@@ONENOTE_APPEND@@ {"pageId":"p102","heading":"FAQ: 春の懇親会の詳細","body":"## 春の懇親会\\n- **日時**: 5 月 23 日(金) 18:30〜\\n- **場所**: 本社 10F ラウンジ\\n- **会費**: 3,000 円\\n\\n出欠は 5 月 16 日までにメールで返信。"}\n\n@@SUGGEST@@ 会費はいくら? || 場所はどこ? || 出欠の締め切りは?';
+
+function pickMockAnswer(reqBody) {
+  try {
+    const b = JSON.parse(reqBody || '{}');
+    const msgs = Array.isArray(b.messages) ? b.messages : [];
+    const lastUser = [...msgs].reverse().find(m => m && m.role === 'user');
+    const content = String((lastUser && lastUser.content) || '');
+    // user prompt のテンプレは "...質問: <ユーザ入力>" で終わる。それ以降だけを意図検出。
+    const m = content.match(/質問:\s*([\s\S]+)$/);
+    const q = m ? m[1] : content;
+    if (/OneNote|ノートに|メモして|議事録|ナレッジ|FAQ/i.test(q)) return MOCK_ANSWER_WITH_APPEND;
+  } catch {}
+  return MOCK_ANSWER;
+}
+
 window.fetch = async (url, opts) => {
   const u = String(url);
 
@@ -313,7 +330,7 @@ window.fetch = async (url, opts) => {
     let stream = true; try { stream = JSON.parse(opts.body).stream !== false; } catch {}
     await new Promise(r => setTimeout(r, 150));
     if (!stream) return jsonResponse({ choices: [{ message: { content: '懇親会の会費' } }] });
-    return sseResponse(MOCK_ANSWER);
+    return sseResponse(pickMockAnswer(opts && opts.body));
   }
   return realFetch(url, opts);
 };

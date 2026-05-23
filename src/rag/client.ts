@@ -129,12 +129,31 @@ const SYSTEM_PROMPT = [
   'この内容に関連する短いフォローアップ質問を3つ (各15文字程度) 付けてください。',
 ].join('\n');
 
-function buildUserPrompt(question: string, sources: RagSource[]): string {
+function buildUserPrompt(question: string, sources: RagSource[], onenoteCtx?: string): string {
   const ctx = sources.map(s =>
     `[${s.n}] 件名: ${s.subject}\n送信者: ${s.from} / ${s.date}\n本文:\n${s.body}`,
   ).join('\n\n---\n\n');
-  return `参照メール:\n\n${ctx}\n\n---\n\n質問: ${question}`;
+  const oneSec = onenoteCtx ? `\n\n---\n\n${onenoteCtx}` : '';
+  return `参照メール:\n\n${ctx}${oneSec}\n\n---\n\n質問: ${question}`;
 }
+
+const ONENOTE_APPEND_INSTRUCTIONS = [
+  '',
+  '【OneNote 追記の自動提案】',
+  'ユーザの質問文に「OneNote に追記」「ノートに書いて/メモして」「ナレッジに追加」「議事録に書いて」など',
+  'OneNote ページへの追記の意図が読み取れる場合のみ、回答の本文と @@SUGGEST@@ の間 (空行で区切る) に',
+  '次の 1 行を出力すること:',
+  '',
+  '@@ONENOTE_APPEND@@ {"pageId":"<id>","heading":"<40字以内>","body":"<MarkdownでOneNoteに追記する本文。改行は \\\\n でエスケープ>"}',
+  '',
+  '- pageId は後述の「OneNote 追記候補ページ一覧」から最も適切な 1 件を選ぶ:',
+  '  1) ユーザが特定ページを名指ししていればそのページ',
+  '  2) なければ「現在開いているページ」',
+  '  3) どちらもなければ内容に最も関係する 1 件',
+  '- heading は短い見出し (例: "FAQ: 春の懇親会の詳細")。',
+  '- body は OneNote にそのまま貼られる Markdown。改行は \\\\n (JSON エスケープ済み) で表現する。',
+  '- 質問に追記の意図が無い場合は出力しないこと (通常の回答だけ返す)。',
+].join('\n');
 
 export interface ChatHistoryMsg { role: 'user' | 'assistant'; content: string; }
 
@@ -148,46 +167,100 @@ function cleanTitle(t: string): string {
 
 const TITLE_MARK = 'TITLE:';
 const SUGGEST_MARK = '@@SUGGEST@@';
+const APPEND_MARK  = '@@ONENOTE_APPEND@@';
+const MAX_MARK_LEN = Math.max(SUGGEST_MARK.length, APPEND_MARK.length);
+
+export interface OneNoteAppendSuggestion { pageId: string; heading: string; body: string; }
 
 /** ストリームを整形するパーサ。
  *  - 先頭の "TITLE: xxx" 行 → onTitle (本文には出さない)
+ *  - "@@ONENOTE_APPEND@@ {json}" を 1 行で → onAppendSuggestion (本文には出さない)
  *  - 末尾の "@@SUGGEST@@ a || b || c" → onSuggest (本文には出さない)
  *  本文だけを onDelta へ流す。マーカーがチャンク境界で割れても拾えるよう末尾を保留する。 */
 function makeStreamParser(
   onDelta: (t: string) => void,
   onTitle?: (t: string) => void,
   onSuggest?: (qs: string[]) => void,
+  onAppendSuggestion?: (s: OneNoteAppendSuggestion) => void,
 ) {
-  let pre = '';            // タイトル検出前の蓄積
+  let pre = '';
   let bodyStarted = false;
   let titleSent = false;
-  let body = '';           // onDelta へ出した確定本文
-  let buf = '';            // 本文の全蓄積 (SUGGEST 検出用)
-  let suggestMode = false;
+  let body = '';           // onDelta へ確定送信済み
+  let buf = '';            // 本文の全蓄積 (マーカー検出用)
+  let mode: 'body' | 'append' | 'suggest' = 'body';
+  let appendRaw = '';
   let suggestRaw = '';
+  let appendEmitted = false;
 
-  function pushBody(text: string): void {
-    if (suggestMode) { suggestRaw += text; return; }
-    buf += text;
-    const idx = buf.indexOf(SUGGEST_MARK);
-    if (idx >= 0) {
-      const head = buf.slice(0, idx);
-      const toEmit = head.slice(body.length);
-      if (toEmit) { body += toEmit; onDelta(toEmit); }
-      suggestMode = true;
-      suggestRaw += buf.slice(idx + SUGGEST_MARK.length);
-      return;
-    }
-    // マーカーがチャンク境界で割れる可能性があるので末尾を保留。
-    const safe = Math.max(body.length, buf.length - (SUGGEST_MARK.length - 1));
-    const toEmit = buf.slice(body.length, safe);
-    if (toEmit) { body += toEmit; onDelta(toEmit); }
+  function emitAppend(): void {
+    if (appendEmitted || !onAppendSuggestion) { appendRaw = ''; return; }
+    appendEmitted = true;
+    try {
+      const obj = JSON.parse(appendRaw.trim()) as { pageId?: string; heading?: string; body?: string };
+      onAppendSuggestion({
+        pageId: String(obj.pageId ?? ''),
+        heading: String(obj.heading ?? ''),
+        body: String(obj.body ?? ''),
+      });
+    } catch { /* JSON 不正は無視 (回答自体は通常通り表示) */ }
+    appendRaw = '';
   }
 
   function emitSuggest(): void {
     if (!suggestRaw || !onSuggest) return;
     const qs = suggestRaw.split(/\|\||\n/).map(x => x.replace(/^[\s\-・*]+/, '').trim()).filter(Boolean).slice(0, 4);
     if (qs.length) onSuggest(qs);
+  }
+
+  function pushBody(text: string): void {
+    if (mode === 'suggest') { suggestRaw += text; return; }
+    if (mode === 'append') {
+      // APPEND は 1 行で完結する想定。\n を見つけたら確定して body モードへ戻る。
+      const nl = text.indexOf('\n');
+      if (nl < 0) { appendRaw += text; return; }
+      appendRaw += text.slice(0, nl);
+      emitAppend();
+      mode = 'body';
+      const tail = text.slice(nl + 1);
+      if (tail) pushBody(tail);
+      return;
+    }
+    // body モード
+    buf += text;
+    const sIdx = buf.indexOf(SUGGEST_MARK);
+    const aIdx = buf.indexOf(APPEND_MARK);
+    let mIdx = -1;
+    let which: 'suggest' | 'append' | null = null;
+    if (sIdx >= 0 && aIdx >= 0) { which = sIdx < aIdx ? 'suggest' : 'append'; mIdx = Math.min(sIdx, aIdx); }
+    else if (sIdx >= 0) { which = 'suggest'; mIdx = sIdx; }
+    else if (aIdx >= 0) { which = 'append'; mIdx = aIdx; }
+    if (mIdx >= 0 && which) {
+      const head = buf.slice(0, mIdx);
+      const toEmit = head.slice(body.length);
+      if (toEmit) { body += toEmit; onDelta(toEmit); }
+      const markLen = which === 'suggest' ? SUGGEST_MARK.length : APPEND_MARK.length;
+      const rest = buf.slice(mIdx + markLen);
+      buf = head; // 確定済み本文だけ残す
+      if (which === 'suggest') {
+        mode = 'suggest';
+        suggestRaw += rest;
+      } else {
+        mode = 'append';
+        const nl = rest.indexOf('\n');
+        if (nl < 0) { appendRaw += rest; return; }
+        appendRaw += rest.slice(0, nl);
+        emitAppend();
+        mode = 'body';
+        const tail = rest.slice(nl + 1);
+        if (tail) pushBody(tail);
+      }
+      return;
+    }
+    // マーカー未検出 → チャンク境界で割れる可能性があるので末尾を保留
+    const safe = Math.max(body.length, buf.length - (MAX_MARK_LEN - 1));
+    const toEmit = buf.slice(body.length, safe);
+    if (toEmit) { body += toEmit; onDelta(toEmit); }
   }
 
   return {
@@ -205,11 +278,24 @@ function makeStreamParser(
     },
     flush(): void {
       if (!bodyStarted) { if (!pre.startsWith(TITLE_MARK)) pushBody(pre); bodyStarted = true; }
-      if (!suggestMode) { const tail = buf.slice(body.length); if (tail) { body += tail; onDelta(tail); } }
+      if (mode === 'body') { const tail = buf.slice(body.length); if (tail) { body += tail; onDelta(tail); } }
+      if (mode === 'append' && appendRaw) emitAppend();
       emitSuggest();
     },
     get body(): string { return body; },
   };
+}
+
+export interface GenerateOptions {
+  signal?: AbortSignal;
+  onTitle?: (title: string) => void;
+  history?: ChatHistoryMsg[];
+  onSuggest?: (qs: string[]) => void;
+  onUsage?: (u: ChatUsage) => void;
+  /** OneNote 追記候補ページ一覧を userPrompt に同梱する文字列。指定時は SYSTEM_PROMPT も拡張される。 */
+  onenoteCtx?: string;
+  /** ストリームに @@ONENOTE_APPEND@@ が出てきたときのコールバック。 */
+  onAppendSuggestion?: (s: OneNoteAppendSuggestion) => void;
 }
 
 /** chat/completions をストリーミング呼び出し。onDelta で本文を逐次受け取る。
@@ -220,23 +306,21 @@ export async function generateAnswer(
   sources: RagSource[],
   s: RuntimeSettings,
   onDelta: (text: string) => void,
-  signal?: AbortSignal,
-  onTitle?: (title: string) => void,
-  history?: ChatHistoryMsg[],
-  onSuggest?: (qs: string[]) => void,
-  onUsage?: (u: ChatUsage) => void,
+  opts: GenerateOptions = {},
 ): Promise<string> {
-  const userPrompt = buildUserPrompt(question, sources);
+  const { signal, onTitle, history, onSuggest, onUsage, onenoteCtx, onAppendSuggestion } = opts;
+  const systemPrompt = onenoteCtx ? (SYSTEM_PROMPT + '\n' + ONENOTE_APPEND_INSTRUCTIONS) : SYSTEM_PROMPT;
+  const userPrompt = buildUserPrompt(question, sources, onenoteCtx);
   const hist = history ?? [];
-  const inputTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(userPrompt)
+  const inputTokens = estimateTokens(systemPrompt) + estimateTokens(userPrompt)
     + hist.reduce((n, m) => n + estimateTokens(m.content), 0);
-  const sep = makeStreamParser(onDelta, onTitle, onSuggest);
+  const sep = makeStreamParser(onDelta, onTitle, onSuggest, onAppendSuggestion);
 
   if (s.provider === 'claude') {
     await streamClaude({
       apiKey: s.claudeApiKey,
       model: s.claudeModel,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [...hist, { role: 'user', content: userPrompt }],
       onText: (t) => sep.feed(t),
       signal,
@@ -264,7 +348,7 @@ export async function generateAnswer(
     // ("Unsupported value: 'temperature' ... Only the default value is supported")。
     body: JSON.stringify({
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         ...hist,
         { role: 'user', content: userPrompt },
       ],

@@ -9,7 +9,7 @@ import { searchVectors, getThread } from '../search/vectorSearch';
 import { loadRules, matchesAnyRule } from '../search/exclusionRules';
 import { htmlToText, renderMailBody, splitHtmlReplyHistory } from '../lib/mailhtml';
 import { cleanBody, splitReplyHistory } from '../lib/mailtext';
-import { generateAnswer, rerankByLLM, type RagSource, type ChatHistoryMsg } from '../rag/client';
+import { generateAnswer, rerankByLLM, type RagSource, type ChatHistoryMsg, type OneNoteAppendSuggestion } from '../rag/client';
 import { loadSettings, saveSettings, CORP_AI_MODELS, CLAUDE_MODELS } from '../api/aiSettings';
 import { isDeveloperMode } from '../utils/devMode';
 import { renderMarkdown } from '../lib/markdown';
@@ -388,6 +388,112 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     aBody.appendChild(row);
   }
 
+  /** OneNote 追記候補ページ一覧 (最大 30 件) + 現在開いているページを system プロンプト用に整形。
+   *  ページが 1 件も無ければ空文字を返す (LLM に余計な指示を出さない)。 */
+  async function buildOneNoteCtx(relayBaseUrl: string, signal?: AbortSignal): Promise<string> {
+    const eng = await getEngine(siteUrl);
+    const excluded = getExcludedOneNotePageIds();
+    const pages = eng.db.importedOneNotePages().filter(p => !excluded.has(p.pageId));
+    if (pages.length === 0) return '';
+    const recent = [...pages]
+      .sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''))
+      .slice(0, 30);
+    const lines = recent.map(p => `[${p.pageId}] ${p.location} ・ ${p.title}`).join('\n');
+    // 現在開いているページは並行取得 (失敗時は単にヒントを省く)
+    const cur = await fetchCurrentOneNotePageId(relayBaseUrl, signal).catch(() => '');
+    const hit = cur ? recent.find(p => p.pageId === cur) : null;
+    const curHint = hit ? `\n\nOneNote で現在開いているページ: ${hit.pageId} (${hit.location} ・ ${hit.title})` : '';
+    return `OneNote 追記候補ページ一覧 (取り込み済み):\n${lines}${curHint}`;
+  }
+
+  /** AI が出力した「OneNote 追記候補」をチャット回答の下に編集可能なインラインカードで描画。
+   *  追記先 / 見出し / 本文を編集してから [追記] で確定。[破棄] でカードを閉じる。 */
+  function renderAppendSuggestion(host: HTMLElement, sug: OneNoteAppendSuggestion, relayBaseUrl: string): void {
+    void (async () => {
+      const eng = await getEngine(siteUrl);
+      const excluded = getExcludedOneNotePageIds();
+      const pages = eng.db.importedOneNotePages().filter(p => !excluded.has(p.pageId));
+      if (pages.length === 0) return;
+
+      const card = el('div', { class: 'tdr-append-card' });
+      const head = el('div', { class: 'tdr-append-card-h' }, [
+        el('span', { class: 'ic', html: icons.notebook(14) }),
+        el('span', { class: 'lbl' }, ['OneNote 追記候補 (AI 提案)']),
+      ]);
+
+      const pageSel = el('select', { class: 'tdr-input' }) as HTMLSelectElement;
+      for (const p of pages) {
+        const opt = el('option', { value: p.pageId }, [`${p.location} ・ ${p.title}`]) as HTMLOptionElement;
+        pageSel.appendChild(opt);
+      }
+      // AI が提示した pageId が一覧にあれば既定。なければ先頭。
+      if (sug.pageId && pages.some(p => p.pageId === sug.pageId)) pageSel.value = sug.pageId;
+
+      const headingInput = el('input', { type: 'text', class: 'tdr-input', value: sug.heading || '' }) as HTMLInputElement;
+      const bodyArea = el('textarea', { class: 'tdr-input', rows: '6', style: 'font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
+      bodyArea.value = sug.body || '';
+      const preview = el('div', { class: 'tdr-onenote-preview', style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3);background:var(--paper-2);min-height:120px;max-height:240px;overflow:auto;font-size:var(--fs-sm);line-height:1.6' });
+      const renderPreview = (): void => {
+        const h = headingInput.value.trim();
+        const headingHtml = h ? `<div style="font-weight:700;margin-bottom:6px">${h.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>` : '';
+        preview.innerHTML = headingHtml + renderMarkdown(bodyArea.value);
+      };
+      headingInput.addEventListener('input', renderPreview);
+      bodyArea.addEventListener('input', renderPreview);
+      renderPreview();
+
+      const appendBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, [
+        el('span', { html: icons.notebook(14) }),
+        'OneNote に追記',
+      ]);
+      const dismissBtn = el('button', { class: 'tdr-btn' }, ['破棄']);
+
+      appendBtn.addEventListener('click', async () => {
+        const pageId = pageSel.value;
+        const heading = headingInput.value.trim();
+        const blocks = markdownToBlocks(bodyArea.value);
+        if (!pageId) { toast(root, '追記先ページを選択してください', 'warn'); return; }
+        if (!heading && blocks.length === 0) { toast(root, '見出しまたは本文を入力してください', 'warn'); return; }
+        appendBtn.disabled = true; dismissBtn.disabled = true;
+        const orig = appendBtn.textContent;
+        appendBtn.textContent = '追記中…';
+        try {
+          await appendOneNotePage(relayBaseUrl, { pageId, heading, blocks });
+          toast(root, 'OneNote に追記しました', 'ok');
+          // 追記済み表示にして編集を畳む。
+          card.classList.add('is-done');
+          card.replaceChildren(el('div', { class: 'tdr-append-card-h' }, [
+            el('span', { class: 'ic', html: icons.check(14) }),
+            el('span', { class: 'lbl' }, [`OneNote に追記しました: ${pageSel.options[pageSel.selectedIndex]?.text ?? ''}`]),
+          ]));
+        } catch (e) {
+          toast(root, `追記失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+          appendBtn.disabled = false; dismissBtn.disabled = false;
+          appendBtn.textContent = orig;
+        }
+      });
+      dismissBtn.addEventListener('click', () => { card.remove(); });
+
+      card.append(
+        head,
+        el('div', { class: 'tdr-append-card-row' }, [
+          el('label', { class: 'tdr-label' }, ['追記先ページ']),
+          pageSel,
+        ]),
+        el('div', { class: 'tdr-append-card-row' }, [
+          el('label', { class: 'tdr-label' }, ['見出し']),
+          headingInput,
+        ]),
+        el('div', { class: 'tdr-append-card-grid' }, [
+          el('div', {}, [el('label', { class: 'tdr-label' }, ['本文 (Markdown)']), bodyArea]),
+          el('div', {}, [el('label', { class: 'tdr-label' }, ['プレビュー']), preview]),
+        ]),
+        el('div', { class: 'tdr-append-card-actions' }, [dismissBtn, appendBtn]),
+      );
+      host.appendChild(card);
+    })();
+  }
+
   function makeAppendOneNoteBtn(question: string, answer: string, relayBaseUrl: string): HTMLElement {
     const btn = el('button', { class: 'tdr-copy', 'aria-label': 'OneNote に追記', title: 'AI の回答を OneNote に FAQ として追記' }, [
       el('span', { class: 'ic', html: icons.notebook(14) }),
@@ -562,6 +668,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     let suggestions: string[] = [];
     let hits: SavedHit[] = [];
     let yen: number | undefined = undefined;
+    let appendSuggestion: OneNoteAppendSuggestion | null = null;
     let t0 = performance.now();
     const createdAt = new Date().toISOString();
 
@@ -569,6 +676,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       if (!full.trim()) return;
       const ms = Math.round(performance.now() - t0);
       finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen, createdAt);
+      if (appendSuggestion) renderAppendSuggestion(refs.aBody, appendSuggestion, s.relayBaseUrl);
       if (suggestions.length) renderSuggest(refs.aBody, suggestions);
       const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
       if (saved.turns.length === 1 && aiTitle) setTitle(currentId, aiTitle);
@@ -605,6 +713,10 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         body: cleanBody(h.isHtml ? htmlToText(h.body) : h.body),
       }));
 
+      // OneNote 追記候補を AI に判断させるための文脈 (取り込み済みページ一覧 + 現在開いているページ)。
+      // 一覧が無ければプロンプトに含めない (LLM への余計な指示を増やさない)。
+      const onenoteCtx = await buildOneNoteCtx(s.relayBaseUrl, signal).catch(() => '');
+
       t0 = performance.now();
       let firstDelta = true;
       await generateAnswer(opts.llmQuestion, sources, s, delta => {
@@ -612,7 +724,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         if (firstDelta) { refs.answerText.textContent = ''; firstDelta = false; } // 「生成中」を消す
         refs.answerText.textContent = full; // ストリーム中はプレーン (タイプ感)
         scrollBottom();
-      }, signal, title => { aiTitle = title; }, history, qs => { suggestions = qs; }, addUsage);
+      }, {
+        signal,
+        onTitle: title => { aiTitle = title; },
+        history,
+        onSuggest: qs => { suggestions = qs; },
+        onUsage: addUsage,
+        onenoteCtx: onenoteCtx || undefined,
+        onAppendSuggestion: sug => { appendSuggestion = sug; },
+      });
 
       save();
 
