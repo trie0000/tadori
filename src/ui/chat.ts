@@ -719,11 +719,25 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
       t0 = performance.now();
       let firstDelta = true;
+      // ストリーム中の markdown レンダリングは rAF で 1 フレーム 1 回までスロットル。
+      // 毎トークン renderMarkdown を回すと重いし、フレーム境界に揃えるとちらつきも減る。
+      let renderQueued = false;
+      const scheduleStreamRender = (): void => {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => {
+          renderQueued = false;
+          refs.answerText.innerHTML = renderMarkdown(full).replace(
+            /\[(\d+)\]/g,
+            (_, n) => `<span class="cite" data-n="${n}">[${n}]</span>`,
+          );
+          scrollBottom();
+        });
+      };
       await generateAnswer(opts.llmQuestion, sources, s, delta => {
         full += delta;
         if (firstDelta) { refs.answerText.textContent = ''; firstDelta = false; } // 「生成中」を消す
-        refs.answerText.textContent = full; // ストリーム中はプレーン (タイプ感)
-        scrollBottom();
+        scheduleStreamRender();
       }, {
         signal,
         onTitle: title => { aiTitle = title; },
