@@ -96,11 +96,15 @@ export async function ingestToSegments(
   // ただしセグメント書込/manifest 更新は順序依存 (seq 採番・版管理) なので直列のまま。
   const concurrency = Math.min(10, Math.max(1, s.embedConcurrency || 3));
   const embedOf = (b: IngestMail[]): Promise<Float32Array[]> => {
-    // 埋め込みは本文のテキストで行う。HTML 本文はタグを除いてテキスト抽出。
-    // 空 (引用/署名のみ等) は埋め込み API が空文字を拒否するため件名へフォールバック。
+    // 埋め込みは「件名 + 本文」をまとめて行う:
+    // - "Re: ..." 等で本文が引用だけのメールも件名で意味検索が利く
+    // - OneNote のチャンクはページタイトル/見出しが件名側に入るので、それも索引される
+    // 件名/本文どちらかが空でも組み立てが破綻しないように "(本文なし)" にフォールバック。
     const bodies = b.map(m => {
       const text = m.isHtml ? cleanBody(htmlToText(m.body)) : cleanBody(m.body);
-      return text || (m.subject || '').trim() || '(本文なし)';
+      const subj = (m.subject || '').trim();
+      const body = text || '(本文なし)';
+      return subj ? `件名: ${subj}\n\n${body}` : body;
     });
     return embedDocsFor(bodies, s, signal);
   };
