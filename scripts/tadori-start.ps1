@@ -27,6 +27,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 
+# 未捕捉エラーで即終了してしまうと bat 側でも一瞬で閉じるので、本体を try/catch で
+# 包んでエラーメッセージを画面に残してから終了する。
+trap {
+    Write-Host ''
+    Write-Host '[tadori-start] 予期しないエラーで終了します:' -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+    Read-Host '何かキーを押して終了'
+    exit 1
+}
+
 # ─── .env から既定値を読む (relay と共通の env ファイル) ─────────────────────
 if (-not $EnvFile) { $EnvFile = Join-Path $scriptDir 'tadori-ai-relay.env' }
 if (Test-Path -LiteralPath $EnvFile) {

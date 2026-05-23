@@ -12,4 +12,13 @@ REM   例: TADORI_SITE_URL=https://contoso.sharepoint.com/sites/xxx
 setlocal
 set SCRIPT_DIR=%~dp0
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%tadori-start.ps1" %*
+set EC=%errorlevel%
+if not "%EC%"=="0" (
+    echo.
+    echo [tadori-start] ----------------------------------------------------------
+    echo [tadori-start] エラーで終了しました (exit code %EC%)
+    echo [tadori-start] 上のメッセージを確認してください。
+    echo [tadori-start] ----------------------------------------------------------
+    pause
+)
 endlocal

@@ -125,11 +125,19 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       return;
     }
     for (const s of sessions) {
+      const titleEl = el('span', { class: 'tdr-session-title', title: s.title }, [s.title]);
       const item = el('div', { class: 'tdr-session' + (s.id === currentId ? ' is-active' : '') }, [
         el('span', { class: 'tdr-session-ic', html: icons.message(14) }),
-        el('span', { class: 'tdr-session-title', title: s.title }, [s.title]),
+        titleEl,
       ]);
       item.addEventListener('click', () => openSession(s.id));
+
+      const renameBtn = el('button', { class: 'tdr-session-edit', 'aria-label': '名前を変更', title: '名前を変更', html: icons.edit(13) });
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        beginRename(s.id, titleEl, s.title);
+      });
+      item.appendChild(renameBtn);
 
       const del = el('button', { class: 'tdr-session-del', 'aria-label': '削除', title: '削除', html: icons.trash(13) });
       del.addEventListener('click', (e) => {
@@ -150,6 +158,26 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       item.appendChild(del);
       sessionList.appendChild(item);
     }
+  }
+
+  /** タイトル要素を入力欄に差し替えてインライン編集。Enter で保存、Esc / blur で確定/取消。 */
+  function beginRename(id: string, titleEl: HTMLElement, current: string): void {
+    const inp = el('input', { class: 'tdr-session-edit-input', value: current }) as HTMLInputElement;
+    titleEl.replaceWith(inp);
+    inp.focus(); inp.select();
+    let done = false;
+    const commit = (save: boolean): void => {
+      if (done) return; done = true;
+      const v = inp.value.trim();
+      if (save && v && v !== current) setTitle(id, v);
+      refreshList(); // 元の DOM に戻す
+    };
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    inp.addEventListener('blur', () => commit(true));
+    inp.addEventListener('click', e => e.stopPropagation());
   }
 
   function startNewSession(): void {
@@ -280,15 +308,16 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     return { turnEl, answerText, metaEl, aBody };
   }
 
-  function finalizeTurn(refs: TurnRefs, fullMarkdown: string, hits: SavedHit[], ms: number, relayBaseUrl: string, query = '', yen?: number): void {
+  function finalizeTurn(refs: TurnRefs, fullMarkdown: string, hits: SavedHit[], ms: number, relayBaseUrl: string, query = '', yen?: number, createdAt?: string): void {
     refs.answerText.innerHTML = renderMarkdown(fullMarkdown).replace(
       /\[(\d+)\]/g,
       (_, n) => `<span class="cite" data-n="${n}">[${n}]</span>`,
     );
-    refs.metaEl.replaceChildren(
-      el('span', {}, [`${hits.length} 件参照`]),
-      el('span', { class: 'mono' }, [`${ms} ms`]),
-    );
+    const metaChildren: HTMLElement[] = [];
+    if (createdAt) metaChildren.push(el('span', { class: 'tdr-turn-time', title: createdAt }, [fmtTurnTime(createdAt)]));
+    metaChildren.push(el('span', {}, [`${hits.length} 件参照`]));
+    metaChildren.push(el('span', { class: 'mono' }, [`${ms} ms`]));
+    refs.metaEl.replaceChildren(...metaChildren);
     // コピーボタンと利用料(目安) を 1 行で。
     const actions = el('div', { class: 'tdr-turn-actions' }, [makeCopyBtn(fullMarkdown)]);
     if (yen != null) {
@@ -305,6 +334,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   function fmtYen(n: number): string {
     const v = n < 0.1 ? n.toFixed(3) : n.toFixed(2);
     return '¥' + v;
+  }
+
+  /** タイムスタンプを表示用に整形 (今日なら HH:mm、別日なら M/D HH:mm)。 */
+  function fmtTurnTime(iso: string): string {
+    const d = new Date(iso); if (isNaN(d.getTime())) return '';
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const today = new Date();
+    const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+    return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
   }
 
   // 回答中の [n] 引用クリックで該当の出典カードへスクロール + 展開 + ハイライト。
@@ -368,7 +406,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const relayBaseUrl = loadSettings().relayBaseUrl;
     for (const t of s.turns) {
       const refs = buildTurn(t.q);
-      finalizeTurn(refs, t.answer, t.hits, t.ms, relayBaseUrl, t.q, t.yen);
+      finalizeTurn(refs, t.answer, t.hits, t.ms, relayBaseUrl, t.q, t.yen, t.createdAt);
     }
     scrollBottom();
   }
@@ -414,13 +452,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     let hits: SavedHit[] = [];
     let yen: number | undefined = undefined;
     let t0 = performance.now();
+    const createdAt = new Date().toISOString();
 
     const save = (): void => {
       if (!full.trim()) return;
       const ms = Math.round(performance.now() - t0);
-      finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen);
+      finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen, createdAt);
       if (suggestions.length) renderSuggest(refs.aBody, suggestions);
-      const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen });
+      const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
       if (saved.turns.length === 1 && aiTitle) setTitle(currentId, aiTitle);
       refreshList();
     };

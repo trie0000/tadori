@@ -23,6 +23,8 @@ export interface SavedTurn {
   ms: number;
   /** このやり取りで発生した AI 利用料の目安 (円)。古い履歴では未設定。 */
   yen?: number;
+  /** 質問が送信された時刻 (ISO 8601)。古い履歴では未設定。 */
+  createdAt?: string;
 }
 
 export interface ChatSession {
