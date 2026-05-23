@@ -13,39 +13,74 @@ export interface VoyageConfig {
   dimensions: number;
 }
 
+async function sleepRespectingAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  await new Promise<void>((resolve, reject) => {
+    const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    const onAbort = (): void => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function inferRetryDelayMs(res: Response, bodyText: string, attempt: number): number {
+  const ra = res.headers.get('Retry-After');
+  if (ra) {
+    const n = Number(ra);
+    if (!isNaN(n) && n >= 0) return Math.min(n * 1000, 120_000);
+    const d = Date.parse(ra);
+    if (!isNaN(d)) return Math.max(0, Math.min(d - Date.now(), 120_000));
+  }
+  const m = bodyText.match(/(?:try again in|retry (?:after|in))\s+(\d+)\s*(?:s|sec|seconds)?/i);
+  if (m) return Math.min(Number(m[1]) * 1000, 120_000);
+  return Math.min(2000 * Math.pow(2, attempt), 30_000);
+}
+
 async function call(
   texts: string[],
   cfg: VoyageConfig,
   inputType: 'query' | 'document',
   signal?: AbortSignal,
+  maxRetries = 5,
 ): Promise<Float32Array[]> {
   if (texts.length === 0) return [];
   if (!cfg.voyageApiKey) throw new Error('Voyage API キーが未設定です');
 
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${cfg.voyageApiKey}`,
-      'content-type': 'application/json',
-    },
-    signal,
-    body: JSON.stringify({
-      input: texts,
-      model: cfg.voyageModel,
-      input_type: inputType,
-      output_dimension: cfg.dimensions,
-    }),
+  const body = JSON.stringify({
+    input: texts,
+    model: cfg.voyageModel,
+    input_type: inputType,
+    output_dimension: cfg.dimensions,
   });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Voyage embed 失敗: HTTP ${res.status} ${body.slice(0, 300)}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${cfg.voyageApiKey}`,
+        'content-type': 'application/json',
+      },
+      signal,
+      body,
+    });
+    if (res.ok) {
+      const json = await res.json() as { data: { index: number; embedding: number[] }[] };
+      const out: Float32Array[] = new Array(texts.length);
+      for (const d of json.data) out[d.index] = Float32Array.from(d.embedding);
+      return out;
+    }
+    const errBody = await res.text().catch(() => '');
+    const retriable = res.status === 429 || (res.status >= 500 && res.status < 600);
+    if (!retriable || attempt === maxRetries) {
+      throw new Error(`Voyage embed 失敗: HTTP ${res.status} ${errBody.slice(0, 300)}`);
+    }
+    const waitMs = inferRetryDelayMs(res, errBody, attempt);
+    // eslint-disable-next-line no-console
+    console.warn(`[voyage] HTTP ${res.status}; retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})`);
+    await sleepRespectingAbort(waitMs, signal);
   }
-
-  const json = await res.json() as { data: { index: number; embedding: number[] }[] };
-  const out: Float32Array[] = new Array(texts.length);
-  for (const d of json.data) out[d.index] = Float32Array.from(d.embedding);
-  return out;
+  throw new Error('Voyage embed: max retries exceeded');
 }
 
 export function embedVoyageQuery(text: string, cfg: VoyageConfig): Promise<Float32Array[]> {
