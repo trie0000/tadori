@@ -14,7 +14,10 @@ import { loadSettings, saveSettings, CORP_AI_MODELS, CLAUDE_MODELS } from '../ap
 import { isDeveloperMode } from '../utils/devMode';
 import { renderMarkdown } from '../lib/markdown';
 import { openMailInOutlook } from '../outlook/import';
-import { openOneNotePage } from '../onenote/import';
+import { openOneNotePage, appendOneNotePage, markdownToBlocks } from '../onenote/import';
+import { getEngine } from '../db/engine';
+import { getExcludedOneNotePageIds } from '../onenote/exclude';
+import { openModal } from './modal';
 import { confirmModal } from './modal';
 import {
   listSessions, getSession, appendTurn, setTitle, deleteSession, newSessionId,
@@ -319,8 +322,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     metaChildren.push(el('span', {}, [`${hits.length} 件参照`]));
     metaChildren.push(el('span', { class: 'mono' }, [`${ms} ms`]));
     refs.metaEl.replaceChildren(...metaChildren);
-    // コピーボタンと利用料(目安) を 1 行で。
-    const actions = el('div', { class: 'tdr-turn-actions' }, [makeCopyBtn(fullMarkdown)]);
+    // コピーボタン / OneNote 追記 / 利用料を 1 行で。
+    const actions = el('div', { class: 'tdr-turn-actions' }, [
+      makeCopyBtn(fullMarkdown),
+      makeAppendOneNoteBtn(query, fullMarkdown, relayBaseUrl),
+    ]);
     if (yen != null) {
       actions.appendChild(el('span', { class: 'tdr-turn-cost', title: 'このやり取りの AI 利用料 (目安)' }, [fmtYen(yen)]));
     }
@@ -380,6 +386,97 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       }),
     ]);
     aBody.appendChild(row);
+  }
+
+  function makeAppendOneNoteBtn(question: string, answer: string, relayBaseUrl: string): HTMLElement {
+    const btn = el('button', { class: 'tdr-copy', 'aria-label': 'OneNote に追記', title: 'AI の回答を OneNote に FAQ として追記' }, [
+      el('span', { class: 'ic', html: icons.notebook(14) }),
+      el('span', { class: 'lbl' }, ['OneNote に追記']),
+    ]);
+    btn.addEventListener('click', () => { void openAppendOneNoteModal(question, answer, relayBaseUrl); });
+    return btn;
+  }
+
+  /** AI 回答を OneNote に「FAQ エントリ」として追記する modal。
+   *  追記先ページ選択 + 見出し編集 + Markdown 本文編集 + プレビュー + 確定。 */
+  async function openAppendOneNoteModal(question: string, answer: string, relayBaseUrl: string): Promise<void> {
+    const eng = await getEngine(siteUrl);
+    const excluded = getExcludedOneNotePageIds();
+    const pages = eng.db.importedOneNotePages().filter(p => !excluded.has(p.pageId));
+    if (pages.length === 0) {
+      toast(root, 'OneNote 追記先がありません。先に「設定 → 取り込み」で OneNote ページを取り込んでください。', 'warn');
+      return;
+    }
+
+    // 引用番号 [n] と "@@SUGGEST@@" 以降は OneNote に貼っても邪魔なので除去。
+    const cleanAnswer = answer
+      .replace(/@@SUGGEST@@[\s\S]*$/, '')
+      .replace(/\s*\[\d+\]/g, '')
+      .trim();
+
+    const headingInput = el('input', { type: 'text', class: 'tdr-input', value: `Q: ${question}` }) as HTMLInputElement;
+    const bodyArea = el('textarea', { class: 'tdr-input', rows: '10', style: 'min-height:200px;font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
+    bodyArea.value = cleanAnswer;
+    const pageSelect = el('select', { class: 'tdr-input' }) as HTMLSelectElement;
+    for (const p of pages) {
+      const opt = el('option', { value: p.pageId }, [`${p.location} ・ ${p.title}`]) as HTMLOptionElement;
+      pageSelect.appendChild(opt);
+    }
+
+    const preview = el('div', { class: 'tdr-onenote-preview', style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);background:var(--paper-2);min-height:200px;max-height:300px;overflow:auto;font-size:var(--fs-sm);line-height:1.7' });
+    const renderPreview = (): void => {
+      const h = headingInput.value.trim();
+      const md = bodyArea.value;
+      const ts = new Date();
+      const stamp = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+      const headingHtml = h ? `<div style="font-weight:700;margin-bottom:6px">${h.replace(/&/g, '&amp;').replace(/</g, '&lt;')} <span style="color:#888;font-size:11px;font-weight:400">[${stamp}]</span></div>` : '';
+      preview.innerHTML = headingHtml + renderMarkdown(md);
+    };
+    headingInput.addEventListener('input', renderPreview);
+    bodyArea.addEventListener('input', renderPreview);
+    renderPreview();
+
+    const body = el('div', { class: 'tdr-modal-body', style: 'display:flex;flex-direction:column;gap:var(--s-4)' }, [
+      el('div', {}, [
+        el('label', { class: 'tdr-label' }, ['追記先ページ']), pageSelect,
+        el('p', { class: 'tdr-hint' }, ['取り込み済みかつ除外していない OneNote ページから選択します。']),
+      ]),
+      el('div', {}, [
+        el('label', { class: 'tdr-label' }, ['見出し']), headingInput,
+      ]),
+      el('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:var(--s-4)' }, [
+        el('div', {}, [
+          el('label', { class: 'tdr-label' }, ['本文 (Markdown)']), bodyArea,
+        ]),
+        el('div', {}, [
+          el('label', { class: 'tdr-label' }, ['プレビュー']), preview,
+        ]),
+      ]),
+    ]);
+
+    const cancelBtn  = el('button', { class: 'tdr-btn' }, ['キャンセル']);
+    const confirmBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, ['OneNote に追記']);
+    const footer = el('div', { class: 'tdr-modal-footer' }, [cancelBtn, confirmBtn]);
+
+    const handle = openModal({ root, title: 'OneNote に追記', body, footer, large: true });
+    cancelBtn.addEventListener('click', () => handle.close());
+    confirmBtn.addEventListener('click', async () => {
+      const pageId = pageSelect.value;
+      const heading = headingInput.value.trim();
+      const blocks = markdownToBlocks(bodyArea.value);
+      if (!heading && blocks.length === 0) { toast(root, '見出しまたは本文を入力してください', 'warn'); return; }
+      confirmBtn.disabled = true; cancelBtn.disabled = true;
+      confirmBtn.textContent = '追記中…';
+      try {
+        await appendOneNotePage(relayBaseUrl, { pageId, heading, blocks });
+        toast(root, 'OneNote に追記しました', 'ok');
+        handle.close();
+      } catch (e) {
+        toast(root, `追記失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+        confirmBtn.disabled = false; cancelBtn.disabled = false;
+        confirmBtn.textContent = 'OneNote に追記';
+      }
+    });
   }
 
   function makeCopyBtn(text: string): HTMLElement {

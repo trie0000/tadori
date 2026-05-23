@@ -222,6 +222,13 @@ window.fetch = async (url, opts) => {
     console.log('[harness] onenote/open id=', id);
     return jsonResponse({ ok: true });
   }
+  if (u.includes('/tadori/onenote/append')) {
+    try {
+      const body = opts && opts.body ? JSON.parse(opts.body) : {};
+      console.log('[harness] onenote/append', body.pageId, body.heading, 'blocks=', (body.blocks||[]).length);
+    } catch (e) { console.warn('[harness] onenote/append bad body', e); }
+    return jsonResponse({ ok: true });
+  }
 
   // ベクトルDB セグメント (新方式) — ステートフルな疑似ファイルストア
   // (PUT で保存・GET で返す)。最初は空 → 投入で manifest/seg が作られる。

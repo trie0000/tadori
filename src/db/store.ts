@@ -143,6 +143,27 @@ export class VectorDb {
     return out;
   }
 
+  /** 取り込み済み OneNote ページ一覧 (1 ページ = 1 エントリ。複数チャンクは集約)。
+   *  「OneNote に追記」モーダルの追記先ピッカーで使う。 */
+  importedOneNotePages(): Array<{ pageId: string; title: string; location: string; lastModified: string }> {
+    const seen = new Map<string, { pageId: string; title: string; location: string; lastModified: string }>();
+    for (const r of this.records.values()) {
+      if (r.kind !== 'onenote' || !r.conversationId) continue;
+      const ex = seen.get(r.conversationId);
+      // チャンク 0 の subject = ページタイトル素のまま。それ以外は "title - heading" になっているので
+      // chunkIdx === 0 を優先採用。なければそのまま入れる。
+      if (!ex || (r.chunkIdx ?? 0) === 0) {
+        seen.set(r.conversationId, {
+          pageId: r.conversationId,
+          title: (r.chunkIdx ?? 0) === 0 ? r.subject : (ex?.title ?? r.subject),
+          location: r.from,
+          lastModified: r.date,
+        });
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.location.localeCompare(b.location) || a.title.localeCompare(b.title));
+  }
+
   /** 同一スレッド (conversationId) のレコードを受信日時の昇順で返す。 */
   byConversation(conversationId: string): MailRecord[] {
     if (!conversationId) return [];

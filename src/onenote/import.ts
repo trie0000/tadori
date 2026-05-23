@@ -116,6 +116,65 @@ export function pagesToIngestMails(pages: OneNotePage[]): IngestMail[] {
   return out;
 }
 
+/** OneNote ページに追記する 1 ブロック。h=見出し / p=段落 / ul=箇条書き / ol=番号付き / q=引用。 */
+export interface AppendBlock { type: 'h' | 'p' | 'ul' | 'ol' | 'q'; text: string; }
+
+/** 既存 OneNote ページの末尾に新規 Outline として追記する (relay 経由)。 */
+export async function appendOneNotePage(
+  relayBaseUrl: string,
+  args: { pageId: string; heading?: string; blocks: AppendBlock[] },
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です');
+  if (!args.pageId) throw new Error('pageId がありません');
+  const res = await fetch(`${trim(relayBaseUrl)}/tadori/onenote/append`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+    signal,
+  });
+  if (!res.ok) {
+    const b = await res.text().catch(() => '');
+    throw new Error(`OneNote 追記失敗: HTTP ${res.status} ${b.slice(0, 300)}`);
+  }
+}
+
+/** Markdown 文字列を簡易ブロック列へ。# 見出し / - 箇条書き / 1. 番号 / > 引用 / それ以外は段落。
+ *  AI 回答を OneNote に貼るための「最低限の構造保持」変換。完全な markdown ではない。 */
+export function markdownToBlocks(md: string): AppendBlock[] {
+  const out: AppendBlock[] = [];
+  const lines = md.replace(/\r\n/g, '\n').split('\n');
+  let para: string[] = [];
+  const flushPara = (): void => {
+    if (para.length) { out.push({ type: 'p', text: inlineMd(para.join(' ').trim()) }); para = []; }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { flushPara(); continue; }
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) { flushPara(); out.push({ type: 'h', text: inlineMd(h[2]) }); continue; }
+    const ul = line.match(/^[-*]\s+(.+)$/);
+    if (ul) { flushPara(); out.push({ type: 'ul', text: inlineMd(ul[1]) }); continue; }
+    const ol = line.match(/^\d+\.\s+(.+)$/);
+    if (ol) { flushPara(); out.push({ type: 'ol', text: inlineMd(ol[1]) }); continue; }
+    const q = line.match(/^>\s*(.*)$/);
+    if (q) { flushPara(); out.push({ type: 'q', text: inlineMd(q[1]) }); continue; }
+    para.push(line);
+  }
+  flushPara();
+  return out;
+}
+
+// インライン markdown を OneNote が解釈する HTML タグへ。**太字** / *斜体* / `code` のみ対応。
+function inlineMd(s: string): string {
+  // XSS 対策で先に &<> をエスケープ → その後マークアップを差し戻す。
+  let t = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  t = t.replace(/\*([^*]+)\*/g, '<i>$1</i>');
+  t = t.replace(/`([^`]+)`/g, '<span style="font-family:Consolas,monospace;background:#f4f4f4">$1</span>');
+  return t;
+}
+
 /** OneNote 上でページを表示。 */
 export async function openOneNotePage(relayBaseUrl: string, pageId: string, signal?: AbortSignal): Promise<void> {
   if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です');
