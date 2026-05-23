@@ -298,6 +298,70 @@ export class SharePointClient {
     return res.text();
   }
 
+  /** ファイル本文 + ETag を取得 (CAS 用)。存在しなければ null。 */
+  async readFileTextWithEtag(serverRelativeUrl: string): Promise<{ text: string; etag: string } | null> {
+    const res = await fetch(
+      `${this.siteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(serverRelativeUrl)}')/$value`,
+      { headers: { Accept: '*/*' }, credentials: 'include' },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`readFile HTTP ${res.status} (${serverRelativeUrl})`);
+    const text = await res.text();
+    const etag = res.headers.get('ETag') || res.headers.get('etag') || '';
+    return { text, etag };
+  }
+
+  /** 既存ファイルを If-Match (ETag) で楽観ロック更新。
+   *  ETag 不一致時は 412 → `CasConflictError` を投げる。呼び出し側はキャッチして再読込→リトライする。 */
+  async uploadFileTextCas(serverRelativeUrl: string, text: string, ifMatchEtag: string): Promise<void> {
+    const digest = await this.getFormDigest();
+    const res = await fetch(
+      `${this.siteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(serverRelativeUrl)}')/$value`,
+      {
+        method: 'POST',
+        headers: await this.headers({
+          'Content-Type': 'text/plain;charset=utf-8',
+          'X-RequestDigest': digest,
+          'X-HTTP-Method': 'PUT',
+          'If-Match': ifMatchEtag,
+        }),
+        credentials: 'include',
+        body: text,
+      },
+    );
+    if (res.status === 412) {
+      const err = new Error('CAS conflict (412)') as Error & { code: string };
+      err.code = 'PRECONDITION_FAILED';
+      throw err;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`uploadFileTextCas HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+  }
+
+  /** 同名ファイルがある時は失敗するアップロード (segment 名衝突防止用)。
+   *  作成成功なら true、既に存在 (409 や SP 固有の 400/500 + "already exists") なら false。 */
+  async uploadFileTextNoOverwrite(folderServerRelativeUrl: string, name: string, text: string): Promise<boolean> {
+    const digest = await this.getFormDigest();
+    const url = `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(folderServerRelativeUrl)}')`
+      + `/Files/add(url='${encodeURIComponent(name)}',overwrite=false)`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: await this.headers({ 'Content-Type': 'text/plain;charset=utf-8', 'X-RequestDigest': digest }),
+      credentials: 'include',
+      body: text,
+    });
+    if (res.ok) return true;
+    // SharePoint は overwrite=false で既存ファイルに当たると 400/500 を返し、本文に「既に存在」系メッセージが入る。
+    if (res.status === 409 || res.status === 400 || res.status === 500) {
+      const body = await res.text().catch(() => '');
+      if (/already exists|exists at|存在|already there/i.test(body)) return false;
+    }
+    const body = await res.text().catch(() => '');
+    throw new Error(`uploadFileTextNoOverwrite HTTP ${res.status} ${body.slice(0, 200)}`);
+  }
+
   /** テキストをファイルとしてアップロード (上書き)。folder は site 込み server-relative。 */
   async uploadFileText(folderServerRelativeUrl: string, name: string, text: string): Promise<void> {
     const digest = await this.getFormDigest();

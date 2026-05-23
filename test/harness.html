@@ -285,23 +285,57 @@ window.fetch = async (url, opts) => {
 
   // ベクトルDB セグメント (新方式) — ステートフルな疑似ファイルストア
   // (PUT で保存・GET で返す)。最初は空 → 投入で manifest/seg が作られる。
+  // CAS 検証のため各ファイルに etag を持たせる: __spFiles[name] = { content, etag }
   if (u.includes('GetFolderByServerRelativeUrl') && u.includes('Exists')) return jsonResponse({ Exists: false }); // ensureFolder 存在確認
   if (u.includes('/_api/web/folders')) return jsonResponse({ ok: true }); // ensureFolder 作成 (addUsingPath / 直接POST 両対応)
   if (u.includes('GetFolderByServerRelativeUrl') && u.includes('/Files/add')) {
     const m = u.match(/add\(url='([^']+)'/);
     const name = m ? decodeURIComponent(m[1]) : null;
-    if (name) window.__spFiles[name] = (opts && opts.body) ? String(opts.body) : '';
+    const overwrite = !/overwrite=false/.test(u);
+    if (!name) return jsonResponse({ ok: true });
+    // overwrite=false で既存 → SP は 400 + "already exists" を返す挙動を模倣
+    if (!overwrite && window.__spFiles[name] != null) {
+      return new Response(JSON.stringify({ 'odata.error': { message: { value: 'A file with the name already exists.' } } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    const content = (opts && opts.body) ? String(opts.body) : '';
+    const prev = window.__spFiles[name];
+    const etag = '"' + (prev && typeof prev === 'object' ? Number(prev.etag.replace(/"/g, '')) + 1 : 1) + '"';
+    window.__spFiles[name] = { content, etag };
     return jsonResponse({ ok: true });
   }
   if (u.includes('GetFolderByServerRelativeUrl') && u.includes('/Files?')) {
     const value = Object.keys(window.__spFiles).filter(n => n.startsWith('seg-')).map(Name => ({ Name }));
     return jsonResponse({ value });
   }
+  // PUT $value (CAS 更新): X-HTTP-Method:PUT + If-Match を見て 412 を返す可能性あり
+  if (u.includes('GetFileByServerRelativeUrl') && u.includes('/$value') && opts && opts.method === 'POST') {
+    const headers = opts.headers || {};
+    const isPut = (headers['X-HTTP-Method'] || headers['x-http-method']) === 'PUT';
+    if (isPut) {
+      const m = u.match(/GetFileByServerRelativeUrl\('([^']+)'\)/);
+      const name = m ? decodeURIComponent(m[1]).split('/').pop() : null;
+      const ifMatch = headers['If-Match'] || headers['if-match'] || '';
+      const file = name ? window.__spFiles[name] : null;
+      if (!file) return new Response('', { status: 404 });
+      const curEtag = (typeof file === 'object' ? file.etag : '');
+      if (ifMatch && ifMatch !== '*' && ifMatch !== curEtag) {
+        return new Response(JSON.stringify({ 'odata.error': { message: { value: 'precondition failed' } } }), { status: 412 });
+      }
+      const newEtag = '"' + (Number(curEtag.replace(/"/g, '')) + 1) + '"';
+      window.__spFiles[name] = { content: String(opts.body || ''), etag: newEtag };
+      return new Response('', { status: 204, headers: { ETag: newEtag } });
+    }
+  }
+  // GET $value: ファイル本文 + ETag を返す
   if (u.includes('GetFileByServerRelativeUrl')) {
     const m = u.match(/GetFileByServerRelativeUrl\('([^']+)'\)/);
     const name = m ? decodeURIComponent(m[1]).split('/').pop() : null;
-    if (name && window.__spFiles[name] != null) {
-      return new Response(window.__spFiles[name], { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const file = name ? window.__spFiles[name] : null;
+    if (file != null) {
+      // 旧形式 (string 直値) / 新形式 (object) 両対応
+      const content = (typeof file === 'object') ? file.content : file;
+      const etag    = (typeof file === 'object') ? file.etag    : '"0"';
+      return new Response(content, { status: 200, headers: { 'Content-Type': 'application/json', ETag: etag } });
     }
     return new Response('', { status: 404 });
   }

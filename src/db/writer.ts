@@ -16,6 +16,7 @@ import {
   nextSegmentIndex, segmentId,
   type Segment, type SegmentRecord,
 } from '../sync/segments';
+import { updateManifestWithCas } from '../sync/spStore';
 import type { RuntimeSettings } from '../api/aiSettings';
 
 export interface IngestMail {
@@ -81,9 +82,12 @@ export async function ingestToSegments(
   const skipped = mails.length - fresh.length;
   if (fresh.length === 0) return { added: 0, skipped, segments: 0, cancelled: false };
 
-  const manifest = await eng.store.ensureManifest();
-  let seq = manifest.maxSeq;
-  let idx = nextSegmentIndex(manifest.sealed);
+  // CAS で安全に更新するため、manifest は毎回 store から最新を読み直す。
+  // 初回は ensureManifest で空 manifest を作っておく。
+  const initial = await eng.store.ensureManifest();
+  let seq = initial.maxSeq;
+  let idx = nextSegmentIndex(initial.sealed);
+  const manifestGeneration = initial.generation;
   let added = 0;
   let segments = 0;
   let cancelled = false;
@@ -154,18 +158,31 @@ export async function ingestToSegments(
       emb: encodeEmbedding(normalize(vecs[i])),
     }));
 
-    const id = segmentId(idx++);
-    const seg: Segment = { id, generation: manifest.generation, records };
-    await eng.store.writeSegment(seg);
+    // segment 書き込み: overwrite=false で名前衝突を検出し、衝突したら idx を bump。
+    // 別 writer が同じ idx で書こうとした場合の名前衝突を Phase 1 ではここで吸収する。
+    const placeholder: Segment = { id: segmentId(idx), generation: manifestGeneration, records };
+    const { id, idx: confirmedIdx } = await eng.store.writeSegmentNoOverwrite(placeholder, idx);
+    idx = confirmedIdx + 1;
+    const seg: Segment = { ...placeholder, id };
     await eng.cache.put(id, seg);
     eng.db.applySegment(seg);
 
-    manifest.sealed.push(id);
-    manifest.maxSeq = seq;
-    manifest.version += 1;
-    manifest.updatedAt = new Date().toISOString();
-    await eng.store.writeManifest(manifest);
-    await eng.cache.setManifest(manifest);
+    // manifest 更新: CAS (If-Match) で楽観ロック。412 で他 writer の更新を検出したら
+    // 最新を再読込してから自分の追加 (seg id + maxSeq + version) を再適用してリトライ。
+    const ourId = id;
+    const ourSeq = seq;
+    const updatedManifest = await updateManifestWithCas(eng.store, m => ({
+      ...m,
+      sealed: m.sealed.includes(ourId) ? m.sealed : [...m.sealed, ourId],
+      maxSeq: Math.max(m.maxSeq, ourSeq),
+      version: m.version + 1,
+    }));
+    await eng.cache.setManifest(updatedManifest);
+    // 他 writer が並行で追加したセグメントがあれば、自分の次の idx も追従して bump。
+    const latestIdx = nextSegmentIndex(updatedManifest.sealed);
+    if (latestIdx > idx) idx = latestIdx;
+    // seq も他 writer の進度に追従 (新規 batch は max(local, manifest)+1 から)
+    if (updatedManifest.maxSeq > seq) seq = updatedManifest.maxSeq;
 
     added += records.length;
     segments++;
@@ -186,17 +203,22 @@ export async function deleteFromSegments(messageId: string, siteUrl: string): Pr
   }
   const eng = await getEngine(siteUrl);
   await eng.sync.sync();
-  const manifest = await eng.store.ensureManifest();
-  const seq = manifest.maxSeq + 1;
-  const id = segmentId(nextSegmentIndex(manifest.sealed));
-  const seg: Segment = { id, generation: manifest.generation, records: [{ seq, op: 'delete', messageId }] };
-  await eng.store.writeSegment(seg);
+  const initial = await eng.store.ensureManifest();
+  const seq = initial.maxSeq + 1;
+  const placeholder: Segment = {
+    id: segmentId(nextSegmentIndex(initial.sealed)),
+    generation: initial.generation,
+    records: [{ seq, op: 'delete', messageId }],
+  };
+  const { id } = await eng.store.writeSegmentNoOverwrite(placeholder, nextSegmentIndex(initial.sealed));
+  const seg: Segment = { ...placeholder, id };
   await eng.cache.put(id, seg);
   eng.db.applySegment(seg);
-  manifest.sealed.push(id);
-  manifest.maxSeq = seq;
-  manifest.version += 1;
-  manifest.updatedAt = new Date().toISOString();
-  await eng.store.writeManifest(manifest);
-  await eng.cache.setManifest(manifest);
+  const updated = await updateManifestWithCas(eng.store, m => ({
+    ...m,
+    sealed: m.sealed.includes(id) ? m.sealed : [...m.sealed, id],
+    maxSeq: Math.max(m.maxSeq, seq),
+    version: m.version + 1,
+  }));
+  await eng.cache.setManifest(updated);
 }
