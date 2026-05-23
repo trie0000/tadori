@@ -7,6 +7,7 @@ import { icons } from './icons';
 import { toast } from './toast';
 import { searchVectors, getThread } from '../search/vectorSearch';
 import { htmlToText, renderMailBody } from '../lib/mailhtml';
+import { cleanBody } from '../lib/mailtext';
 import { generateAnswer, type RagSource, type ChatHistoryMsg } from '../rag/client';
 import { loadSettings, saveSettings, CORP_AI_MODELS, CLAUDE_MODELS } from '../api/aiSettings';
 import { isDeveloperMode } from '../utils/devMode';
@@ -183,22 +184,27 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       el('span', { class: 'mono' }, [`${ms} ms`]),
     );
     refs.aBody.appendChild(makeCopyBtn(fullMarkdown));
-    if (hits.length) appendSources(refs.aBody, hits, relayBaseUrl, query);
+    // 回答中に [n] として実際に引用された番号を抽出。
+    const cited = new Set<number>();
+    for (const m of fullMarkdown.matchAll(/\[(\d+)\]/g)) cited.add(Number(m[1]));
+    if (hits.length) appendSources(refs.aBody, hits, relayBaseUrl, query, cited);
     wireCiteJump(refs.aBody);
   }
 
   // 回答中の [n] 引用クリックで該当の出典カードへスクロール + 展開 + ハイライト。
+  // カードは [data-n] で引けるので、グループ分け (引用 / 候補) されていても OK。
   function wireCiteJump(aBody: HTMLElement): void {
     const cites = aBody.querySelectorAll<HTMLElement>('.cite');
-    const hitCards = aBody.querySelectorAll<HTMLElement>('.tdr-hit');
-    if (!cites.length || !hitCards.length) return;
-    const hdr = aBody.querySelector('.tdr-sources-h');
-    const list = aBody.querySelector('.tdr-sources');
+    if (!cites.length) return;
     cites.forEach(c => {
       c.addEventListener('click', () => {
-        const n = Number(c.dataset.n);
-        const card = hitCards[n - 1];
+        const n = c.dataset.n;
+        if (!n) return;
+        const card = aBody.querySelector<HTMLElement>(`.tdr-hit[data-n="${n}"]`);
         if (!card) return;
+        // カードが属するグループの header / list を畳みから展開。
+        const list = card.closest<HTMLElement>('.tdr-sources');
+        const hdr = list?.previousElementSibling as HTMLElement | null;
         hdr?.classList.remove('collapsed');
         list?.classList.remove('collapsed');
         card.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -308,10 +314,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       }
       refs.answerText.replaceChildren(thinkingEl('回答を生成中'));
 
-      // RAG には本文をプレーンテキストで渡す (HTML はタグを除去)。
+      // RAG にはプレーンテキスト + 引用履歴を剥がした「新規発言だけ」を渡す。
+      // Re: メール間で引用が重複してプロンプトを膨らませるのを防ぐ。
       const sources: RagSource[] = hits.map((h, i) => ({
         n: i + 1, subject: h.subject, from: h.from, date: h.date,
-        body: h.isHtml ? htmlToText(h.body) : h.body,
+        body: cleanBody(h.isHtml ? htmlToText(h.body) : h.body),
       }));
 
       t0 = performance.now();
@@ -370,76 +377,89 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     });
   }
 
-  function appendSources(container: HTMLElement, hits: SavedHit[], relayBaseUrl: string, query = ''): void {
-    // 既定は折りたたみ (collapsed)。ヘッダクリックで開閉。
-    const hdrEl  = el('div', { class: 'tdr-sources-h collapsed' }, [
-      el('span', { html: icons.chevron(14) }),
-      el('span', {}, [`参照メール (${hits.length})`]),
+  /** 出典カード 1 件を生成 (n は引用番号 = hits 内の元インデックス+1)。 */
+  function renderHitCard(h: SavedHit, n: number, relayBaseUrl: string, query: string): HTMLElement {
+    const plain = h.isHtml ? htmlToText(h.body) : h.body;
+    const hitEl = el('div', { class: 'tdr-hit' });
+    hitEl.dataset.n = String(n); // [n] クリックでの引き当て用
+    const head = el('div', { class: 'tdr-hit-head' }, [
+      el('span', { class: 'tdr-hit-num' }, [String(n)]),
+      el('span', { class: 'tdr-hit-subject' }, [h.subject]),
+      el('span', { class: 'tdr-hit-score' }, [h.score.toFixed(3)]),
     ]);
-    const listEl = el('div', { class: 'tdr-sources collapsed' });
-
-    hdrEl.addEventListener('click', () => {
-      hdrEl.classList.toggle('collapsed');
-      listEl.classList.toggle('collapsed');
-    });
-
-    hits.forEach((h, i) => {
-      const plain = h.isHtml ? htmlToText(h.body) : h.body;
-      const hitEl = el('div', { class: 'tdr-hit' });
-      const head = el('div', { class: 'tdr-hit-head' }, [
-        el('span', { class: 'tdr-hit-num' }, [String(i + 1)]),
-        el('span', { class: 'tdr-hit-subject' }, [h.subject]),
-        el('span', { class: 'tdr-hit-score' }, [h.score.toFixed(3)]),
-      ]);
-      if (h.internetMessageId) {
-        const openBtn = el('button', {
-          class: 'tdr-hit-open', 'aria-label': 'Outlook で開く', title: 'Outlook で開く',
-          html: icons.external(14),
-        });
-        openBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          openBtn.disabled = true;
-          try {
-            await openMailInOutlook(relayBaseUrl, h.internetMessageId);
-          } catch (err: unknown) {
-            toast(root, `Outlook 表示に失敗: ${err instanceof Error ? err.message : String(err)}`, 'error');
-          } finally {
-            openBtn.disabled = false;
-          }
-        });
-        head.appendChild(openBtn);
-      }
-      if (h.conversationId) {
-        const sumBtn = el('button', {
-          class: 'tdr-hit-open', 'aria-label': '経緯を要約', title: '同じスレッドのやり取りを時系列で要約',
-          html: icons.list(14),
-        });
-        sumBtn.addEventListener('click', (e) => { e.stopPropagation(); void summarizeThread(h); });
-        head.appendChild(sumBtn);
-      }
-      hitEl.appendChild(head);
-      hitEl.appendChild(el('div', { class: 'tdr-hit-from' }, [
-        `${h.from}  ${h.date.slice(0, 10)}`,
-      ]));
-      const snippetEl = el('div', { class: 'tdr-hit-snippet' });
-      highlightInto(snippetEl, plain.slice(0, 140) + (plain.length > 140 ? '…' : ''), query);
-      hitEl.appendChild(snippetEl);
-
-      let detail: HTMLElement | null = null;
-      hitEl.addEventListener('click', () => {
-        hitEl.classList.toggle('is-open');
-        if (!detail) {
-          detail = el('div', { class: 'tdr-hit-detail' });
-          renderMailBody(detail, h.body, h.isHtml); // HTML はサニタイズ描画、プレーンは pre-wrap
-          hitEl.appendChild(detail);
-        } else {
-          detail.hidden = !detail.hidden;
-        }
+    if (h.internetMessageId) {
+      const openBtn = el('button', {
+        class: 'tdr-hit-open', 'aria-label': 'Outlook で開く', title: 'Outlook で開く',
+        html: icons.external(14),
       });
-      listEl.appendChild(hitEl);
-    });
+      openBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        openBtn.disabled = true;
+        try { await openMailInOutlook(relayBaseUrl, h.internetMessageId); }
+        catch (err: unknown) { toast(root, `Outlook 表示に失敗: ${err instanceof Error ? err.message : String(err)}`, 'error'); }
+        finally { openBtn.disabled = false; }
+      });
+      head.appendChild(openBtn);
+    }
+    if (h.conversationId) {
+      const sumBtn = el('button', {
+        class: 'tdr-hit-open', 'aria-label': '経緯を要約', title: '同じスレッドのやり取りを時系列で要約',
+        html: icons.list(14),
+      });
+      sumBtn.addEventListener('click', (e) => { e.stopPropagation(); void summarizeThread(h); });
+      head.appendChild(sumBtn);
+    }
+    hitEl.appendChild(head);
+    hitEl.appendChild(el('div', { class: 'tdr-hit-from' }, [
+      `${h.from}  ${h.date.slice(0, 10)}`,
+    ]));
+    const snippetEl = el('div', { class: 'tdr-hit-snippet' });
+    highlightInto(snippetEl, plain.slice(0, 140) + (plain.length > 140 ? '…' : ''), query);
+    hitEl.appendChild(snippetEl);
 
-    container.append(hdrEl, listEl);
+    let detail: HTMLElement | null = null;
+    hitEl.addEventListener('click', () => {
+      hitEl.classList.toggle('is-open');
+      if (!detail) {
+        detail = el('div', { class: 'tdr-hit-detail' });
+        renderMailBody(detail, h.body, h.isHtml); // HTML はサニタイズ描画、プレーンは pre-wrap
+        hitEl.appendChild(detail);
+      } else { detail.hidden = !detail.hidden; }
+    });
+    return hitEl;
+  }
+
+  /** 出典グループ (ヘッダ + リスト) を 1 つ container に追加。 */
+  function renderSourceGroup(
+    container: HTMLElement, label: string, entries: Array<{ h: SavedHit; n: number }>,
+    relayBaseUrl: string, query: string, defaultCollapsed: boolean,
+  ): void {
+    const cls = defaultCollapsed ? ' collapsed' : '';
+    const hdr  = el('div', { class: `tdr-sources-h${cls}` }, [
+      el('span', { html: icons.chevron(14) }),
+      el('span', {}, [`${label} (${entries.length})`]),
+    ]);
+    const list = el('div', { class: `tdr-sources${cls}` });
+    hdr.addEventListener('click', () => { hdr.classList.toggle('collapsed'); list.classList.toggle('collapsed'); });
+    for (const { h, n } of entries) list.appendChild(renderHitCard(h, n, relayBaseUrl, query));
+    container.append(hdr, list);
+  }
+
+  function appendSources(
+    container: HTMLElement, hits: SavedHit[], relayBaseUrl: string, query = '', cited?: Set<number>,
+  ): void {
+    const all = hits.map((h, i) => ({ h, n: i + 1 }));
+    const hasCitedSplit = !!cited && cited.size > 0 && cited.size < hits.length;
+    if (hasCitedSplit) {
+      const citedEntries = all.filter(e => cited!.has(e.n));
+      const otherEntries = all.filter(e => !cited!.has(e.n));
+      // 引用されたカードは既定で展開、その他は折りたたみ。
+      renderSourceGroup(container, '引用された参照メール', citedEntries, relayBaseUrl, query, false);
+      renderSourceGroup(container, '他に検索された候補', otherEntries, relayBaseUrl, query, true);
+    } else {
+      // 引用ゼロ or 全件引用なら 1 グループにまとめる (既定で折りたたみ)。
+      renderSourceGroup(container, '参照メール', all, relayBaseUrl, query, true);
+    }
   }
 
   function scrollBottom(): void { thread.scrollTop = thread.scrollHeight; }
