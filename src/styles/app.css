@@ -135,10 +135,10 @@
 #tadori-root .tdr-copy.is-done{color:var(--ok);border-color:var(--ok);}
 #tadori-root .tdr-copy .ic{display:inline-flex;}
 #tadori-root .tdr-note-form{position:relative;line-height:0;max-width:var(--thread-w);margin:0 auto;}
-#tadori-root .tdr-note-input{width:100%;min-height:48px;max-height:40vh;padding:14px 56px 14px 16px;resize:none;font-family:inherit;font-size:var(--fs-base);line-height:1.6;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-3);outline:none;}
+#tadori-root .tdr-note-input{width:100%;min-height:48px;max-height:40vh;padding:14px 60px 14px 16px;resize:none;font-family:inherit;font-size:var(--fs-base);line-height:1.6;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-3);outline:none;}
 #tadori-root .tdr-note-input:focus{background:var(--paper);border-color:var(--line-strong);}
 #tadori-root .tdr-note-input::placeholder{color:var(--ink-4);}
-#tadori-root .tdr-note-submit{position:absolute;right:10px;bottom:9px;width:30px;height:30px;border:none;background:var(--accent);color:#fff;border-radius:var(--r-2);cursor:pointer;display:flex;align-items:center;justify-content:center;}
+#tadori-root .tdr-note-submit{position:absolute;right:22px;bottom:11px;width:26px;height:26px;border:none;background:var(--accent);color:#fff;border-radius:var(--r-2);cursor:pointer;display:flex;align-items:center;justify-content:center;}
 #tadori-root .tdr-note-submit:hover{background:var(--accent-strong);}
 #tadori-root .tdr-note-submit:disabled{opacity:.4;cursor:default;}
 #tadori-root .tdr-note-submit.is-stop{background:var(--danger);}

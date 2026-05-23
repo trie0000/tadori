@@ -76,7 +76,7 @@ interface TurnRefs {
 export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement {
   const thread = el('div', { class: 'tdr-thread' });
   const input  = el('textarea', { class: 'tdr-note-input', placeholder: 'メーリングリストについて質問…', rows: '1' });
-  const sendBtn = el('button', { class: 'tdr-note-submit', 'aria-label': '送信', html: icons.send(16) });
+  const sendBtn = el('button', { class: 'tdr-note-submit', 'aria-label': '送信', html: icons.send(14) });
 
   const emptyState = el('div', { class: 'tdr-empty' }, [
     el('div', { class: 'big' }, ['辿り']),
@@ -95,7 +95,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   function setGenerating(on: boolean): void {
     generating = on;
     sendBtn.classList.toggle('is-stop', on);
-    sendBtn.innerHTML = on ? icons.stop(16) : icons.send(16);
+    sendBtn.innerHTML = on ? icons.stop(14) : icons.send(14);
     sendBtn.setAttribute('aria-label', on ? '停止' : '送信');
   }
 
