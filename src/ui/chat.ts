@@ -406,92 +406,26 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     return `OneNote 追記候補ページ一覧 (取り込み済み):\n${lines}${curHint}`;
   }
 
-  /** AI が出力した「OneNote 追記候補」をチャット回答の下に編集可能なインラインカードで描画。
-   *  追記先 / 見出し / 本文を編集してから [追記] で確定。[破棄] でカードを閉じる。 */
-  function renderAppendSuggestion(host: HTMLElement, sug: OneNoteAppendSuggestion, relayBaseUrl: string): void {
-    void (async () => {
-      const eng = await getEngine(siteUrl);
-      const excluded = getExcludedOneNotePageIds();
-      const pages = eng.db.importedOneNotePages().filter(p => !excluded.has(p.pageId));
-      if (pages.length === 0) return;
-
-      const card = el('div', { class: 'tdr-append-card' });
-      const head = el('div', { class: 'tdr-append-card-h' }, [
-        el('span', { class: 'ic', html: icons.notebook(14) }),
-        el('span', { class: 'lbl' }, ['OneNote 追記候補 (AI 提案)']),
-      ]);
-
-      const pageSel = el('select', { class: 'tdr-input' }) as HTMLSelectElement;
-      for (const p of pages) {
-        const opt = el('option', { value: p.pageId }, [`${p.location} ・ ${p.title}`]) as HTMLOptionElement;
-        pageSel.appendChild(opt);
-      }
-      // AI が提示した pageId が一覧にあれば既定。なければ先頭。
-      if (sug.pageId && pages.some(p => p.pageId === sug.pageId)) pageSel.value = sug.pageId;
-
-      const headingInput = el('input', { type: 'text', class: 'tdr-input', value: sug.heading || '' }) as HTMLInputElement;
-      const bodyArea = el('textarea', { class: 'tdr-input', rows: '6', style: 'font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
-      bodyArea.value = sug.body || '';
-      const preview = el('div', { class: 'tdr-onenote-preview', style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3);background:var(--paper-2);min-height:120px;max-height:240px;overflow:auto;font-size:var(--fs-sm);line-height:1.6' });
-      const renderPreview = (): void => {
-        const h = headingInput.value.trim();
-        const headingHtml = h ? `<div style="font-weight:700;margin-bottom:6px">${h.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>` : '';
-        preview.innerHTML = headingHtml + renderMarkdown(bodyArea.value);
-      };
-      headingInput.addEventListener('input', renderPreview);
-      bodyArea.addEventListener('input', renderPreview);
-      renderPreview();
-
-      const appendBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, [
-        el('span', { html: icons.notebook(14) }),
-        'OneNote に追記',
-      ]);
-      const dismissBtn = el('button', { class: 'tdr-btn' }, ['破棄']);
-
-      appendBtn.addEventListener('click', async () => {
-        const pageId = pageSel.value;
-        const heading = headingInput.value.trim();
-        const blocks = markdownToBlocks(bodyArea.value);
-        if (!pageId) { toast(root, '追記先ページを選択してください', 'warn'); return; }
-        if (!heading && blocks.length === 0) { toast(root, '見出しまたは本文を入力してください', 'warn'); return; }
-        appendBtn.disabled = true; dismissBtn.disabled = true;
-        const orig = appendBtn.textContent;
-        appendBtn.textContent = '追記中…';
-        try {
-          await appendOneNotePage(relayBaseUrl, { pageId, heading, blocks });
-          toast(root, 'OneNote に追記しました', 'ok');
-          // 追記済み表示にして編集を畳む。
-          card.classList.add('is-done');
-          card.replaceChildren(el('div', { class: 'tdr-append-card-h' }, [
-            el('span', { class: 'ic', html: icons.check(14) }),
-            el('span', { class: 'lbl' }, [`OneNote に追記しました: ${pageSel.options[pageSel.selectedIndex]?.text ?? ''}`]),
-          ]));
-        } catch (e) {
-          toast(root, `追記失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
-          appendBtn.disabled = false; dismissBtn.disabled = false;
-          appendBtn.textContent = orig;
-        }
-      });
-      dismissBtn.addEventListener('click', () => { card.remove(); });
-
-      card.append(
-        head,
-        el('div', { class: 'tdr-append-card-row' }, [
-          el('label', { class: 'tdr-label' }, ['追記先ページ']),
-          pageSel,
-        ]),
-        el('div', { class: 'tdr-append-card-row' }, [
-          el('label', { class: 'tdr-label' }, ['見出し']),
-          headingInput,
-        ]),
-        el('div', { class: 'tdr-append-card-grid' }, [
-          el('div', {}, [el('label', { class: 'tdr-label' }, ['本文 (Markdown)']), bodyArea]),
-          el('div', {}, [el('label', { class: 'tdr-label' }, ['プレビュー']), preview]),
-        ]),
-        el('div', { class: 'tdr-append-card-actions' }, [dismissBtn, appendBtn]),
-      );
-      host.appendChild(card);
-    })();
+  /** AI が出力した「OneNote 追記候補」を回答の下に「通知バー」として描画。
+   *  [内容を確認して追記] で大きなモーダルが開き、編集 → 確定する流れ。 */
+  function renderAppendSuggestion(
+    host: HTMLElement, sug: OneNoteAppendSuggestion, relayBaseUrl: string,
+    question: string, answer: string,
+  ): void {
+    const notice = el('div', { class: 'tdr-append-notice' });
+    const lead = el('div', { class: 'tdr-append-notice-lead' }, [
+      el('span', { class: 'ic', html: icons.notebook(16) }),
+      el('span', { class: 'lbl' }, ['AI が OneNote 追記候補を生成しました']),
+      el('span', { class: 'sub' }, [sug.heading ? `見出し: ${sug.heading}` : '内容を確認してください']),
+    ]);
+    const openBtn  = el('button', { class: 'tdr-btn tdr-btn--primary' }, ['内容を確認して追記']);
+    const skipBtn  = el('button', { class: 'tdr-btn' }, ['破棄']);
+    openBtn.addEventListener('click', () => {
+      void openAppendOneNoteModal(question, answer, relayBaseUrl, sug);
+    });
+    skipBtn.addEventListener('click', () => { notice.remove(); });
+    notice.append(lead, el('div', { class: 'tdr-append-notice-actions' }, [skipBtn, openBtn]));
+    host.appendChild(notice);
   }
 
   function makeAppendOneNoteBtn(question: string, answer: string, relayBaseUrl: string): HTMLElement {
@@ -504,8 +438,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   }
 
   /** AI 回答を OneNote に「FAQ エントリ」として追記する modal。
-   *  追記先ページ選択 + 見出し編集 + Markdown 本文編集 + プレビュー + 確定。 */
-  async function openAppendOneNoteModal(question: string, answer: string, relayBaseUrl: string): Promise<void> {
+   *  追記先ページ選択 + 見出し編集 + Markdown 本文編集 + プレビュー + 確定。
+   *  prefill が指定された場合 (AI が追記候補を生成した時) はそちらの値を初期値にする。 */
+  async function openAppendOneNoteModal(
+    question: string,
+    answer: string,
+    relayBaseUrl: string,
+    prefill?: OneNoteAppendSuggestion,
+  ): Promise<void> {
     const eng = await getEngine(siteUrl);
     const excluded = getExcludedOneNotePageIds();
     const pages = eng.db.importedOneNotePages().filter(p => !excluded.has(p.pageId));
@@ -520,27 +460,37 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       .replace(/\s*\[\d+\]/g, '')
       .trim();
 
-    const headingInput = el('input', { type: 'text', class: 'tdr-input', value: `Q: ${question}` }) as HTMLInputElement;
-    const bodyArea = el('textarea', { class: 'tdr-input', rows: '10', style: 'min-height:200px;font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
-    bodyArea.value = cleanAnswer;
+    const defaultHeading = prefill?.heading?.trim() || `Q: ${question}`;
+    const defaultBody    = prefill?.body || cleanAnswer;
+    const headingInput = el('input', { type: 'text', class: 'tdr-input', value: defaultHeading }) as HTMLInputElement;
+    const bodyArea = el('textarea', { class: 'tdr-input', rows: '12', style: 'min-height:280px;font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
+    bodyArea.value = defaultBody;
     const pageSelect = el('select', { class: 'tdr-input' }) as HTMLSelectElement;
     for (const p of pages) {
       const opt = el('option', { value: p.pageId }, [`${p.location} ・ ${p.title}`]) as HTMLOptionElement;
       pageSelect.appendChild(opt);
     }
     const currentHint = el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-1)' }, ['取り込み済みかつ除外していない OneNote ページから選択します。']);
-    // OneNote で「今開いているページ」を既定にする (取り込み済みなら)。
-    void (async () => {
-      const cur = await fetchCurrentOneNotePageId(relayBaseUrl).catch(() => '');
-      if (!cur) return;
-      const hit = pages.find(p => p.pageId === cur);
-      if (hit) {
-        pageSelect.value = cur;
-        currentHint.textContent = `現在開いているページを既定に選択しています: ${hit.location} ・ ${hit.title}`;
-      } else {
-        currentHint.textContent = '現在開いている OneNote ページはまだ取り込まれていないため、別のページを選んでください。';
-      }
-    })();
+
+    if (prefill?.pageId && pages.some(p => p.pageId === prefill.pageId)) {
+      // AI が選んだページがあればそれを既定にし、現在開いているページ取得は省略 (上書きされないように)。
+      pageSelect.value = prefill.pageId;
+      const hit = pages.find(p => p.pageId === prefill.pageId)!;
+      currentHint.textContent = `AI が選んだページを既定にしています: ${hit.location} ・ ${hit.title}`;
+    } else {
+      // OneNote で「今開いているページ」を既定にする (取り込み済みなら)。
+      void (async () => {
+        const cur = await fetchCurrentOneNotePageId(relayBaseUrl).catch(() => '');
+        if (!cur) return;
+        const hit = pages.find(p => p.pageId === cur);
+        if (hit) {
+          pageSelect.value = cur;
+          currentHint.textContent = `現在開いているページを既定に選択しています: ${hit.location} ・ ${hit.title}`;
+        } else {
+          currentHint.textContent = '現在開いている OneNote ページはまだ取り込まれていないため、別のページを選んでください。';
+        }
+      })();
+    }
 
     const preview = el('div', { class: 'tdr-onenote-preview', style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);background:var(--paper-2);min-height:200px;max-height:300px;overflow:auto;font-size:var(--fs-sm);line-height:1.7' });
     const renderPreview = (): void => {
@@ -676,7 +626,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       if (!full.trim()) return;
       const ms = Math.round(performance.now() - t0);
       finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen, createdAt);
-      if (appendSuggestion) renderAppendSuggestion(refs.aBody, appendSuggestion, s.relayBaseUrl);
+      if (appendSuggestion) renderAppendSuggestion(refs.aBody, appendSuggestion, s.relayBaseUrl, opts.displayQ, full);
       if (suggestions.length) renderSuggest(refs.aBody, suggestions);
       const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
       if (saved.turns.length === 1 && aiTitle) setTitle(currentId, aiTitle);

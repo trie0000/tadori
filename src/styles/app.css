@@ -258,13 +258,12 @@
 #tadori-root .tdr-fieldgrid > label{color:var(--ink-3);font-size:var(--fs-sm);justify-self:end;text-align:right;white-space:nowrap;}
 #tadori-root .tdr-fieldgrid > label.top{align-self:start;padding-top:8px;}
 #tadori-root .tdr-label{display:block;font-size:var(--fs-sm);color:var(--ink-3);margin-bottom:var(--s-2);font-weight:600;}
-#tadori-root .tdr-append-card{margin-top:var(--s-5);padding:var(--s-5);border:1px solid var(--accent-strong);border-radius:var(--r-3);background:var(--accent-soft);}
-#tadori-root .tdr-append-card.is-done{border-color:var(--line);background:var(--paper-2);}
-#tadori-root .tdr-append-card-h{display:flex;align-items:center;gap:var(--s-2);font-weight:700;color:var(--accent-strong);font-size:var(--fs-md);margin-bottom:var(--s-4);}
-#tadori-root .tdr-append-card.is-done .tdr-append-card-h{color:var(--ink-3);margin-bottom:0;}
-#tadori-root .tdr-append-card-row{margin-bottom:var(--s-3);}
-#tadori-root .tdr-append-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-4);margin-bottom:var(--s-4);}
-#tadori-root .tdr-append-card-actions{display:flex;gap:var(--s-3);justify-content:flex-end;}
+#tadori-root .tdr-append-notice{margin-top:var(--s-5);padding:var(--s-4) var(--s-5);border:1px solid var(--accent-strong);border-radius:var(--r-3);background:var(--accent-soft);display:flex;align-items:center;gap:var(--s-4);flex-wrap:wrap;}
+#tadori-root .tdr-append-notice-lead{display:flex;align-items:center;gap:var(--s-3);flex:1;min-width:0;}
+#tadori-root .tdr-append-notice-lead .ic{display:inline-flex;color:var(--accent-strong);}
+#tadori-root .tdr-append-notice-lead .lbl{font-weight:700;color:var(--accent-strong);font-size:var(--fs-md);white-space:nowrap;}
+#tadori-root .tdr-append-notice-lead .sub{font-size:var(--fs-sm);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#tadori-root .tdr-append-notice-actions{display:flex;gap:var(--s-2);flex-shrink:0;}
 #tadori-root .tdr-input{width:100%;height:32px;padding:0 10px;font-size:var(--fs-md);font-family:inherit;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-2);outline:none;}
 #tadori-root .tdr-input:focus{background:var(--paper);border-color:var(--line-strong);}
 #tadori-root textarea.tdr-input{height:auto;padding:8px 10px;resize:vertical;line-height:1.6;}
