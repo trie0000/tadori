@@ -461,7 +461,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       .trim();
 
     const defaultHeading = prefill?.heading?.trim() || `Q: ${question}`;
-    const defaultBody    = prefill?.body || cleanAnswer;
+    // AI 提案時も手動オープン時も「OneNote に貼る本文」は常にチャット回答テキスト
+    // (引用 [n] と @@SUGGEST@@ を除いたもの) を使う。LLM が prefill.body を返しても無視。
+    // こうしないと「チャットに出力した内容」と「OneNote へ追記される内容」が
+    // 別物になりやすい (LLM が二度書きで微妙にズレる)。
+    const defaultBody    = cleanAnswer;
     const headingInput = el('input', { type: 'text', class: 'tdr-input', value: defaultHeading }) as HTMLInputElement;
     const bodyArea = el('textarea', { class: 'tdr-input', rows: '12', style: 'min-height:280px;font-family:var(--font-mono);font-size:var(--fs-sm)' }) as HTMLTextAreaElement;
     bodyArea.value = defaultBody;
