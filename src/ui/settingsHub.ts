@@ -1,5 +1,5 @@
-// 設定ハブ — Spira と同じ左ナビ + 右ペイン構成。
-// AI 接続設定は spira:ai:* キーで Spira と共有。
+// 設定ハブ — Spira と同じ左ナビ + 右ペイン構成 (UI の見た目だけ流用)。
+// AI 接続設定は tadori:ai:* キーで Tadori 専用に独立管理 (Spira とは別)。
 // 開発者モード時のみ Claude API / Voyage 埋め込みの設定とテストデータ投入を表示。
 
 import { el } from '../lib/dom';
@@ -145,7 +145,7 @@ function mkSelect(options: { value: string; label: string }[], current: string, 
 // ─── AI 接続 ──────────────────────────────────────────────────────────────────
 
 function buildAiPane(pane: HTMLElement, draft: RuntimeSettings): void {
-  paneHead(pane, 'AI 設定', '★ Spira と共有される設定です。どちらで変更しても両方のツールに反映されます。');
+  paneHead(pane, 'AI 設定', '★ この設定は Tadori 専用です (Spira とは独立管理)。同じ値を設定してもよいですが、変更は伝播しません。');
   const dev = isDeveloperMode();
 
   // dev OFF なのに claude が選ばれていたら corp に丸める
@@ -1298,12 +1298,13 @@ function buildResetAllPane(pane: HTMLElement, root: HTMLElement, siteUrl: string
         onConfirm: async () => {
           try {
             await wipeImportedMails(siteUrl);
-            // localStorage の Tadori / 共有 AI 設定キーを掃除 (他アプリ Spira 用キーも消える点に注意)。
+            // localStorage の Tadori 関連キーだけを掃除。
+            // Tadori と Spira は AI 設定も独立管理なので、spira:* は触らない。
             try {
               const keys: string[] = [];
               for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i); if (!k) continue;
-                if (k.startsWith('tadori') || k.startsWith('tadori.') || k.startsWith('spira:ai:')) keys.push(k);
+                if (k.startsWith('tadori:') || k.startsWith('tadori.')) keys.push(k);
               }
               for (const k of keys) localStorage.removeItem(k);
             } catch { /* quota / noop */ }

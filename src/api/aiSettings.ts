@@ -60,15 +60,17 @@ export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-large';
 const DEFAULT_EMBEDDING_API_VERSION = '2024-02-01';
 
 const KEY = {
-  // Spira と共有
-  provider:         'spira:ai:provider',
-  corpKey:          'spira:ai:corp:key',
-  corpModel:        'spira:ai:corp:model',
-  corpBaseUrl:      'spira:ai:corp:base-url',
-  corpDeployPrefix: 'spira:ai:corp:deploy-prefix',
-  corpOverrides:    'spira:ai:corp:overrides',
-  claudeKey:        'spira:ai:claude:key',
-  claudeModel:      'spira:ai:claude:model',
+  // Tadori 専用 (Spira とは独立管理 — 同じ値を設定することはあっても、変更は伝播しない)。
+  // 旧バージョンは spira:ai:* を Spira と共有していたが、独立運用へ移行。
+  // 既存ユーザの値は loadSettings() 初回呼出時のマイグレーションで旧キーから自動コピーされる。
+  provider:         'tadori:ai:provider',
+  corpKey:          'tadori:ai:corp:key',
+  corpModel:        'tadori:ai:corp:model',
+  corpBaseUrl:      'tadori:ai:corp:base-url',
+  corpDeployPrefix: 'tadori:ai:corp:deploy-prefix',
+  corpOverrides:    'tadori:ai:corp:overrides',
+  claudeKey:        'tadori:ai:claude:key',
+  claudeModel:      'tadori:ai:claude:model',
   // Tadori 固有
   embeddingModel:      'tadori:embedding-model',
   embeddingApiVersion: 'tadori:api-version',
@@ -203,7 +205,39 @@ export function resolveProvider(): Provider {
   return DEFAULT_PROVIDER;
 }
 
+// 旧バージョンで Spira と共有してた spira:ai:* キーから tadori:ai:* キーへの
+// ワンタイムマイグレーション。新キー側に既に値があれば触らない (= 上書きしない)。
+// 旧キーは消さない (= Spira 側はそのまま使い続けられる)。冪等。
+const MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
+  ['spira:ai:provider',          'tadori:ai:provider'],
+  ['spira:ai:corp:key',          'tadori:ai:corp:key'],
+  ['spira:ai:corp:model',        'tadori:ai:corp:model'],
+  ['spira:ai:corp:base-url',     'tadori:ai:corp:base-url'],
+  ['spira:ai:corp:deploy-prefix','tadori:ai:corp:deploy-prefix'],
+  ['spira:ai:corp:overrides',    'tadori:ai:corp:overrides'],
+  ['spira:ai:claude:key',        'tadori:ai:claude:key'],
+  ['spira:ai:claude:model',      'tadori:ai:claude:model'],
+];
+let migrated = false;
+function migrateFromSpira(): void {
+  if (migrated) return;
+  migrated = true;
+  try {
+    for (const [oldKey, newKey] of MIGRATIONS) {
+      if (localStorage.getItem(newKey) != null) continue;       // 新キーが既に設定済なら触らない
+      const v = localStorage.getItem(oldKey);
+      if (v != null) localStorage.setItem(newKey, v);
+      // `:default` キャッシュも一応コピー (org-wide default 仕組みを残す)
+      const dv = localStorage.getItem(oldKey + DEFAULT_SUFFIX);
+      if (dv != null && localStorage.getItem(newKey + DEFAULT_SUFFIX) == null) {
+        localStorage.setItem(newKey + DEFAULT_SUFFIX, dv);
+      }
+    }
+  } catch { /* localStorage 不可環境では諦め */ }
+}
+
 export function loadSettings(): RuntimeSettings {
+  migrateFromSpira();
   const chatModel = getCorpModel();
   const chatEp = resolveCorpChat(chatModel);
   const embeddingModel = getEmbeddingModel();
