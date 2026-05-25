@@ -7,7 +7,7 @@
 import { streamClaude } from '../api/aiClaude';
 import { recordChat } from '../usage/tracker';
 import { chatYen } from '../usage/pricing';
-import type { ChatUsage } from './client';
+import type { ChatHistoryMsg, ChatUsage } from './client';
 import type { RuntimeSettings } from '../api/aiSettings';
 
 export interface QueryPlan {
@@ -33,6 +33,15 @@ const ROUTER_SYSTEM = [
   '- vectorQuery には質問の「意味的な主題」を 1 文で表す。元の文がそのまま使えるならそれでよい。',
   '  IDや固有名詞は keywords 側に出すので vectorQuery には含めなくてもよい。',
   '- 純粋に ID/コード/固有名詞だけで探す質問 → mode="keyword"。意味で探す質問 → "semantic"。両方混在 → "mixed"。',
+  '',
+  '★ フォローアップ質問 (直前会話を踏まえた省略表現) の解決 ★',
+  '- 「直前の会話」が与えられた場合、ユーザの質問に含まれる指示語 (それ / あれ / この / 上記 等) や、',
+  '  「要約して」「もっと詳しく」「続きは?」のような前提が省略された質問は、',
+  '  直前会話から主題を補って vectorQuery を組み立てること。',
+  '  例: 直前 user="APP-2026-1234 の承認状況は?" / 今回 user="要約して"',
+  '      → vectorQuery="APP-2026-1234 の承認状況の要約", keywords=["APP-2026-1234"]',
+  '- 直前会話と無関係な新規質問の場合は、履歴を無視してその質問だけを解析する。',
+  '',
   '- 出力は厳密に有効な JSON。前後に説明文や ```等の装飾は付けない。',
 ].join('\n');
 
@@ -55,18 +64,39 @@ function parsePlan(text: string): QueryPlan | null {
   } catch { return null; }
 }
 
+/** 直近会話を ROUTER 用に短く整形する。アシスタント回答は要点だけ拾えればよいので短くトリム。 */
+function formatHistoryForRouter(history?: ChatHistoryMsg[]): string {
+  if (!history || history.length === 0) return '';
+  // 直近 4 メッセージ (= 2 ターン分) で十分。長すぎるとコスト増+ノイズ。
+  const recent = history.slice(-4);
+  const lines = recent.map(m => {
+    const tag = m.role === 'user' ? 'ユーザ' : 'アシスタント';
+    // アシスタントの長文回答は冒頭 300 字に圧縮 (主題の特定には十分)
+    const max = m.role === 'assistant' ? 300 : 500;
+    const c = m.content.length > max ? m.content.slice(0, max) + '…' : m.content;
+    return `${tag}: ${c}`;
+  });
+  return lines.join('\n');
+}
+
 /** 質問を LLM に投げて検索プランを得る。失敗時は安全なフォールバック (元クエリ + キーワード無し)。
- *  チャット応答生成 (generateAnswer) と同じプロバイダ・モデルを使う。 */
+ *  チャット応答生成 (generateAnswer) と同じプロバイダ・モデルを使う。
+ *  history を渡すと、フォローアップ質問 (「要約して」「もっと詳しく」「それは誰?」等) の
+ *  指示語・省略を解決した vectorQuery を組み立てるようルータに指示する。 */
 export async function classifyQuery(
   question: string,
   s: RuntimeSettings,
   signal?: AbortSignal,
   onUsage?: (u: ChatUsage) => void,
+  history?: ChatHistoryMsg[],
 ): Promise<QueryPlan> {
   const q = question.trim();
   if (!q) return FALLBACK(q);
 
-  const userPrompt = `質問:\n${q}`;
+  const histBlock = formatHistoryForRouter(history);
+  const userPrompt = histBlock
+    ? `直前の会話 (古い順):\n${histBlock}\n\n---\n\n今回の質問:\n${q}`
+    : `質問:\n${q}`;
   try {
     let text = '';
     const estIn = Math.ceil((ROUTER_SYSTEM.length + userPrompt.length) / 3);

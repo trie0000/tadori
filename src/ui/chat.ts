@@ -981,8 +981,9 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       getHits: async (signal) => {
         const s = loadSettings();
         // LLM クエリルータ: ID/固有名詞などは keywords 完全一致 + 意味文はベクトル検索、と分担。
+        // フォローアップ質問 (「要約して」等) の指示語を直前会話から解決させるため history を渡す。
         // 失敗時は元クエリそのままで通常検索にフォールバック (queryRouter 内で FALLBACK 処理)。
-        const plan = await classifyQuery(q, s, signal);
+        const plan = await classifyQuery(q, s, signal, undefined, buildHistory());
         const topK = s.rerankEnabled ? Math.max(s.rerankCandidates, s.ragTopK) : s.ragTopK;
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
