@@ -755,11 +755,26 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
 function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement, siteUrl: string): void {
   pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['PPTX マニュアル取り込み']));
   pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-4)' }, [
-    'SharePoint のドキュメントフォルダ URL を指定して、配下の PowerPoint (.pptx) マニュアルを取り込みます。',
+    'SharePoint のドキュメントライブラリ配下のフォルダ URL を指定して、その配下の PowerPoint (.pptx) マニュアルを取り込みます。',
     '各スライドを Vision LLM (GPT-5 等) で markdown 化 → 通常のチャンクと同じくベクトル DB に格納。',
     '増分同期: 前回取り込み以降に更新されたファイルだけ再処理。SP から消えたファイルの chunk は自動削除。',
     '※ relay (PowerPoint COM) + Vision 対応モデルが必要。コスト目安: 1 スライド ≒ 1 円。',
   ]));
+  // URL 入力欄の上に、貼り付けるべき URL の例 (パターン別)。SP の現代 UI で出るアドレスバー URL も自動で
+  // ?id= パラメータから serverRelativeUrl を取り出すので、そのまま貼ってよい。
+  const urlGuide = el('details', { style: 'margin:var(--s-2) 0;font-size:var(--fs-xs);color:var(--ink-4)' }, [
+    el('summary', { style: 'cursor:pointer' }, ['どの URL を貼ればいい?']),
+    el('div', { style: 'padding:var(--s-2) 0 0 var(--s-4)' }, [
+      el('div', {}, ['SP の「ドキュメント」を開いて取り込みたいフォルダに入り、ブラウザのアドレスバーをコピーで OK。']),
+      el('div', { style: 'margin-top:var(--s-2)' }, ['対応する形式:']),
+      el('ul', { style: 'margin:var(--s-1) 0 0 var(--s-4);padding:0' }, [
+        el('li', {}, ['モダン UI のビュー URL (', el('code', {}, ['?id=...']), ' 付き) — そのまま貼って OK']),
+        el('li', {}, ['フォルダの直接リンク (', el('code', {}, ['https://.../Shared Documents/Manuals']), ')']),
+        el('li', {}, ['serverRelative パス (', el('code', {}, ['/sites/foo/Shared Documents/Manuals']), ')']),
+      ]),
+    ]),
+  ]);
+  pane.appendChild(urlGuide);
 
   // ── フォルダ追加フォーム ──
   const urlInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'https://contoso.sharepoint.com/sites/foo/Shared Documents/Manuals' }) as HTMLInputElement;

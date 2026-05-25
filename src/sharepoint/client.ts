@@ -516,17 +516,38 @@ export interface FileInfo {
   uniqueId: string;
 }
 
-/** 絶対 URL ("https://contoso.sharepoint.com/sites/foo/Shared%20Documents/Manuals") から
- *  serverRelativeUrl ("/sites/foo/Shared Documents/Manuals") を取り出す。
- *  既に serverRelative ("/sites/...") なら decodeURI してそのまま返す。
- *  SP の URL は %20 (スペース) を含む形でコピーされがちなので decodeURIComponent しておく。 */
+/** 任意の SP フォルダ URL を serverRelativeUrl に正規化する。
+ *  対応する形式:
+ *    A. 絶対 URL のフォルダ直リンク
+ *       https://contoso.sharepoint.com/sites/foo/Shared%20Documents/Manuals
+ *       → /sites/foo/Shared Documents/Manuals
+ *    B. モダン UI のビュー URL (アドレスバーに出る形)
+ *       https://contoso.sharepoint.com/sites/foo/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2Ffoo%2FShared%20Documents%2FManuals&viewid=...
+ *       → /sites/foo/Shared Documents/Manuals  (?id= を優先)
+ *    C. serverRelativeUrl がそのまま
+ *       /sites/foo/Shared Documents/Manuals
+ *       → そのまま (decode のみ)
+ *    D. ファイル直リンク (.pptx 等)
+ *       → 末尾のファイル名は剥がさず serverRelative にする (呼び出し側で処理)
+ */
 export function toServerRelativeUrl(input: string): string {
   const s = input.trim();
   if (!s) return '';
   if (s.startsWith('/')) return safeDecode(s.replace(/\/+$/, ''));
   try {
     const u = new URL(s);
-    return safeDecode(u.pathname.replace(/\/+$/, ''));
+    // モダン UI のビュー URL: ?id=<serverRelativeUrl> が真正値
+    // ?RootFolder= も同じ意味で出ることがある (classic / OneDrive)
+    const idParam = u.searchParams.get('id') || u.searchParams.get('RootFolder');
+    if (idParam) {
+      // id は既に / 始まりの serverRelative。decode + 末尾スラッシュ整理
+      return safeDecode(idParam).replace(/\/+$/, '');
+    }
+    // 通常: pathname をそのまま使う。AllItems.aspx 等ビュー URL は除外する必要があるが、
+    // それは id パラメータ無しで来ることはまず無い (出来たら最後の "/Forms/AllItems.aspx" を取り除く)
+    let pathname = u.pathname.replace(/\/+$/, '');
+    pathname = pathname.replace(/\/Forms\/AllItems\.aspx$/i, '');
+    return safeDecode(pathname);
   } catch {
     return safeDecode(s.replace(/\/+$/, ''));
   }
