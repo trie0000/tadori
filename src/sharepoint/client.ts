@@ -420,47 +420,78 @@ export class SharePointClient {
   }
 
   /** フォルダ配下のファイル一覧 (拡張メタ付き)。recursive=true でサブフォルダも再帰探索。
-   *  巨大ライブラリでも安全に動くよう、再帰深度 8 / 1 フォルダ 5000 件で打ち切り。 */
+   *  巨大ライブラリでも安全に動くよう、再帰深度 8 / 1 フォルダ 5000 件で打ち切り。
+   *
+   *  ★ ルートフォルダ (queue 最初) の取得が失敗したら throw する。
+   *     SP の権限/パス間違いの典型エラーをユーザーに気付かせるため。
+   *     サブフォルダの失敗は warn ログだけで続行 (一部 Forms 等が読めなくても全体は止めない)。 */
   async listFolderItems(
     folderServerRelativeUrl: string,
     opts: { recursive?: boolean } = {},
   ): Promise<FileInfo[]> {
     const out: FileInfo[] = [];
     const maxDepth = 8;
-    const queue: Array<{ path: string; depth: number }> = [{ path: folderServerRelativeUrl, depth: 0 }];
+    const queue: Array<{ path: string; depth: number; isRoot: boolean }> = [
+      { path: folderServerRelativeUrl, depth: 0, isRoot: true },
+    ];
     while (queue.length > 0) {
-      const { path, depth } = queue.shift()!;
-      // ファイル
+      const { path, depth, isRoot } = queue.shift()!;
+      const filesUrl =
+        `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
+        + `/Files?$select=Name,ServerRelativeUrl,TimeLastModified,Length,UniqueId&$top=5000`;
+
+      console.log('[tadori] listFolderItems GET', filesUrl);
+      let filesRes: Response;
       try {
-        const filesRes = await fetch(
-          `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
-          + `/Files?$select=Name,ServerRelativeUrl,TimeLastModified,Length,UniqueId&$top=5000`,
-          { headers: await this.headers(), credentials: 'include' },
-        );
-        if (filesRes.ok) {
-          const j = await filesRes.json() as { value?: SPFileRaw[] };
-          for (const f of j.value ?? []) out.push(SharePointClient.asFileInfo(f));
-        }
-      } catch { /* 1 フォルダ失敗は無視して続行 */ }
+        filesRes = await fetch(filesUrl, { headers: await this.headers(), credentials: 'include' });
+      } catch (e) {
+        const msg = `フォルダ一覧取得 通信失敗 (${path}): ${(e as Error).message}`;
+        if (isRoot) throw new Error(msg);
+        console.warn('[tadori]', msg);
+        continue;
+      }
+
+      if (!filesRes.ok) {
+        const bodyText = await filesRes.text().catch(() => '');
+        const msg = `フォルダ一覧 HTTP ${filesRes.status} (${path}): ${bodyText.slice(0, 300)}`;
+        if (isRoot) throw new Error(msg);
+        console.warn('[tadori]', msg);
+        continue;
+      }
+      try {
+        const j = await filesRes.json() as { value?: SPFileRaw[] };
+        const got = j.value ?? [];
+        console.log(`[tadori] listFolderItems ${path}: ${got.length} files`);
+        for (const f of got) out.push(SharePointClient.asFileInfo(f));
+      } catch (e) {
+        const msg = `フォルダ一覧 JSON parse 失敗 (${path}): ${(e as Error).message}`;
+        if (isRoot) throw new Error(msg);
+        console.warn('[tadori]', msg);
+        continue;
+      }
+
       // サブフォルダ
       if (opts.recursive && depth < maxDepth) {
+        const foldersUrl =
+          `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
+          + `/Folders?$select=Name,ServerRelativeUrl&$top=5000`;
         try {
-          const foldersRes = await fetch(
-            `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
-            + `/Folders?$select=Name,ServerRelativeUrl&$top=5000`,
-            { headers: await this.headers(), credentials: 'include' },
-          );
+          const foldersRes = await fetch(foldersUrl, { headers: await this.headers(), credentials: 'include' });
           if (foldersRes.ok) {
             const j = await foldersRes.json() as { value?: { Name?: string; ServerRelativeUrl?: string }[] };
             for (const f of j.value ?? []) {
               const n = (f.Name ?? '').trim();
               const sru = (f.ServerRelativeUrl ?? '').trim();
-              // SharePoint の隠しフォルダ (Forms 等) はスキップ
-              if (!sru || n === 'Forms' || n.startsWith('_')) continue;
-              queue.push({ path: sru, depth: depth + 1 });
+              // SharePoint の隠しフォルダ (Forms 等) と先頭 _ はスキップ
+              if (!sru || n === 'Forms' || n.startsWith('_') || n === '.tadori-thumbs') continue;
+              queue.push({ path: sru, depth: depth + 1, isRoot: false });
             }
+          } else {
+            console.warn(`[tadori] サブフォルダ取得 HTTP ${foldersRes.status} (${path})`);
           }
-        } catch { /* サブフォルダ取得失敗は無視 */ }
+        } catch (e) {
+          console.warn(`[tadori] サブフォルダ取得失敗 (${path}):`, (e as Error).message);
+        }
       }
     }
     return out;

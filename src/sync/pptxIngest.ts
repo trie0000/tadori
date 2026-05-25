@@ -261,11 +261,27 @@ export async function syncPptxFolder(
 ): Promise<PptxIngestResult> {
   const { siteUrl, folderServerRel } = resolveSpFolder(folder.url, fallbackSiteUrl);
   const sp = new SharePointClient(siteUrl);
+  console.log('[tadori] pptx sync start',
+    { inputUrl: folder.url, siteUrl, folderServerRel, recursive: folder.recursive });
 
   // 1. enumerate
-  onProgress?.({ file: '', fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0, phase: 'fetch', message: 'フォルダ一覧を取得中…' });
+  onProgress?.({ file: '', fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0, phase: 'fetch', message: `フォルダ一覧を取得中… (${folderServerRel})` });
   const items = await sp.listFolderItems(folderServerRel, { recursive: folder.recursive });
   const pptxFiles = filterPptxFiles(items);
+  console.log(`[tadori] pptx sync: ${items.length} items found / ${pptxFiles.length} pptx files`);
+  if (pptxFiles.length === 0 && items.length === 0) {
+    onProgress?.({
+      file: '', fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0,
+      phase: 'skip',
+      message: `フォルダにファイルが見つかりません (${folderServerRel})。URL/権限を確認してください。`,
+    });
+  } else if (pptxFiles.length === 0) {
+    onProgress?.({
+      file: '', fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0,
+      phase: 'skip',
+      message: `${items.length} 個のファイルがありますが .pptx は 0 件でした。`,
+    });
+  }
 
   // 2. 増分判定 & 削除検知
   const { toIngest, skipped, deleted } = pickTargets(pptxFiles, folder.perFile);
