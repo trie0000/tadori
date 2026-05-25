@@ -1,4 +1,4 @@
-# Foundry Local 速度ベンチマーク (CPU 実行想定)。
+﻿# Foundry Local 速度ベンチマーク (CPU 実行想定)。
 #
 # 目的: Tadori で chatProvider='foundry-local' を選択肢にする前に、業務 PC で
 # 実際にどれくらいの速度が出るかを事前検証する。
