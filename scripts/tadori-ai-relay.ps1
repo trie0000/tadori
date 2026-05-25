@@ -228,7 +228,7 @@ function Add-CorsHeaders {
     $Response.Headers.Add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     $Response.Headers.Add(
         'Access-Control-Allow-Headers',
-        'Content-Type, api-key, Accept, Authorization, X-Requested-With, x-api-key'
+        'Content-Type, api-key, Accept, Authorization, X-Requested-With, x-api-key, X-Tadori-Filename'
     )
     # Chrome の Private Network Access (PNA): https の公開オリジンから
     # http://127.0.0.1 (private) へのリクエストはこのヘッダが無いと拒否される。
