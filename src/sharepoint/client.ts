@@ -406,4 +406,132 @@ export class SharePointClient {
     const json = await res.json() as { value?: { Name?: string }[] };
     return (json.value ?? []).map(f => f.Name ?? '').filter(Boolean);
   }
+
+  /** ファイルのメタデータ (PPTX 取り込み等での増分判定用)。 */
+  // 公開 export しているので利用側は SharePointClient.FileInfo を参照
+  static asFileInfo(f: SPFileRaw): FileInfo {
+    return {
+      name:             f.Name ?? '',
+      serverRelativeUrl: f.ServerRelativeUrl ?? '',
+      timeLastModified: f.TimeLastModified ?? '',
+      length:           typeof f.Length === 'string' ? Number(f.Length) || 0 : (f.Length ?? 0),
+      uniqueId:         f.UniqueId ?? '',
+    };
+  }
+
+  /** フォルダ配下のファイル一覧 (拡張メタ付き)。recursive=true でサブフォルダも再帰探索。
+   *  巨大ライブラリでも安全に動くよう、再帰深度 8 / 1 フォルダ 5000 件で打ち切り。 */
+  async listFolderItems(
+    folderServerRelativeUrl: string,
+    opts: { recursive?: boolean } = {},
+  ): Promise<FileInfo[]> {
+    const out: FileInfo[] = [];
+    const maxDepth = 8;
+    const queue: Array<{ path: string; depth: number }> = [{ path: folderServerRelativeUrl, depth: 0 }];
+    while (queue.length > 0) {
+      const { path, depth } = queue.shift()!;
+      // ファイル
+      try {
+        const filesRes = await fetch(
+          `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
+          + `/Files?$select=Name,ServerRelativeUrl,TimeLastModified,Length,UniqueId&$top=5000`,
+          { headers: await this.headers(), credentials: 'include' },
+        );
+        if (filesRes.ok) {
+          const j = await filesRes.json() as { value?: SPFileRaw[] };
+          for (const f of j.value ?? []) out.push(SharePointClient.asFileInfo(f));
+        }
+      } catch { /* 1 フォルダ失敗は無視して続行 */ }
+      // サブフォルダ
+      if (opts.recursive && depth < maxDepth) {
+        try {
+          const foldersRes = await fetch(
+            `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`
+            + `/Folders?$select=Name,ServerRelativeUrl&$top=5000`,
+            { headers: await this.headers(), credentials: 'include' },
+          );
+          if (foldersRes.ok) {
+            const j = await foldersRes.json() as { value?: { Name?: string; ServerRelativeUrl?: string }[] };
+            for (const f of j.value ?? []) {
+              const n = (f.Name ?? '').trim();
+              const sru = (f.ServerRelativeUrl ?? '').trim();
+              // SharePoint の隠しフォルダ (Forms 等) はスキップ
+              if (!sru || n === 'Forms' || n.startsWith('_')) continue;
+              queue.push({ path: sru, depth: depth + 1 });
+            }
+          }
+        } catch { /* サブフォルダ取得失敗は無視 */ }
+      }
+    }
+    return out;
+  }
+
+  /** バイナリファイルを ArrayBuffer で取得。404 は null。 */
+  async fetchFileBytes(serverRelativeUrl: string): Promise<ArrayBuffer | null> {
+    const res = await fetch(
+      `${this.siteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(serverRelativeUrl)}')/$value`,
+      { headers: { Accept: '*/*' }, credentials: 'include' },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`fetchFileBytes HTTP ${res.status} (${serverRelativeUrl})`);
+    return res.arrayBuffer();
+  }
+
+  /** バイナリ (画像など) を SP にアップロード (上書き)。 */
+  async uploadFileBytes(folderServerRelativeUrl: string, name: string, bytes: ArrayBuffer): Promise<void> {
+    const digest = await this.getFormDigest();
+    const url = `${this.siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(folderServerRelativeUrl)}')`
+      + `/Files/add(url='${encodeURIComponent(name)}',overwrite=true)`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: await this.headers({ 'Content-Type': 'application/octet-stream', 'X-RequestDigest': digest }),
+      credentials: 'include',
+      body: bytes,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`uploadFileBytes(${name}) HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+  }
+}
+
+/** SP REST の File オブジェクト (内部型)。 */
+interface SPFileRaw {
+  Name?: string;
+  ServerRelativeUrl?: string;
+  TimeLastModified?: string;
+  Length?: number | string;
+  UniqueId?: string;
+}
+
+/** PPTX 取り込み等で使う、ファイルのメタ情報。 */
+export interface FileInfo {
+  name: string;
+  serverRelativeUrl: string;
+  /** ISO8601 (例: "2026-04-20T10:33:00Z") */
+  timeLastModified: string;
+  /** バイト数 */
+  length: number;
+  /** SP の File 内部 ID (GUID)。Office Online URL 構築に使える。 */
+  uniqueId: string;
+}
+
+/** 絶対 URL ("https://contoso.sharepoint.com/sites/foo/Shared%20Documents/Manuals") から
+ *  serverRelativeUrl ("/sites/foo/Shared Documents/Manuals") を取り出す。
+ *  既に serverRelative ("/sites/...") なら decodeURI してそのまま返す。
+ *  SP の URL は %20 (スペース) を含む形でコピーされがちなので decodeURIComponent しておく。 */
+export function toServerRelativeUrl(input: string): string {
+  const s = input.trim();
+  if (!s) return '';
+  if (s.startsWith('/')) return safeDecode(s.replace(/\/+$/, ''));
+  try {
+    const u = new URL(s);
+    return safeDecode(u.pathname.replace(/\/+$/, ''));
+  } catch {
+    return safeDecode(s.replace(/\/+$/, ''));
+  }
+}
+
+function safeDecode(s: string): string {
+  try { return decodeURIComponent(s); } catch { return s; }
 }

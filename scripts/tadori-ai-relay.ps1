@@ -199,6 +199,8 @@ Write-Host "  GET  $baseUrlShort/tadori/onenote/open      (OneNote 上でペー�
 Write-Host "  POST $baseUrlShort/tadori/onenote/append    (OneNote ページ末尾にブロック追記: body={pageId,heading,blocks})"
 Write-Host "  GET  $baseUrlShort/tadori/onenote/tadori-outlines (Tadori が追記した Outline 一覧: ?pageId=)"
 Write-Host "  POST $baseUrlShort/tadori/onenote/replace-outline (Tadori 追記 Outline を上書き: body={pageId,outlineId,heading,blocks,user})"
+Write-Host "  POST $baseUrlShort/tadori/pptx-extract     (PPTX を slide 配列に展開: body=octet-stream, header X-Tadori-Filename)"
+Write-Host "  POST $baseUrlShort/tadori/pptx-open        (PowerPoint で fileUrl + slideNo へジャンプ: body={fileUrl,slideNo})"
 Write-Host "  GET  $baseUrlShort/tadori/onenote/current   (OneNote で現在表示中のページ ID を返す)"
 Write-Host "  GET  $baseUrlShort/tadori/onenote/links     (指定ページ ID 群の OneNote リンクを返す: ?ids=)"
 Write-Host "  GET  $baseUrlShort/tadori/tadori.bundle.js (開発: ローカル dist のバンドル配信)"
@@ -1162,6 +1164,284 @@ function Invoke-OneNoteReplaceOutline {
     }
 }
 
+# ─── PowerPoint COM (PPTX マニュアル取り込み) ───────────────────────────────
+# PPTX を 1 枚ずつ PNG + Shape テキスト + 表データへ展開し、Vision LLM が
+# 解析できる形で返す。委託先環境向けに使うため Office パスワードロックは
+# 利用者側で解除済みであることを前提とする。
+#
+# PowerPoint COM は単一スレッド前提なので、Mutex で逐次化する (relay の
+# HTTP リスナは並列でリクエストを受けるため、何もしないと COM が壊れる)。
+
+$script:PptxComMutex = New-Object System.Threading.Mutex($false, "Global\TadoriPptxCom")
+
+function Get-PowerPointOrNull {
+    try {
+        try { return [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') }
+        catch { return (New-Object -ComObject PowerPoint.Application) }
+    } catch { return $null }
+}
+
+# Shape を再帰的に走査して text / 表 / placeholder title を集める。
+# GroupShapes 配下の子も拾うために再帰。
+function Read-PptxShapes {
+    param($Shapes, [System.Collections.ArrayList]$TextBlocks, [System.Collections.ArrayList]$Tables, [ref]$Title)
+    foreach ($shape in $Shapes) {
+        try {
+            # グループは中身を再帰展開
+            if ($shape.Type -eq 6 -and $shape.GroupItems) {  # msoGroup = 6
+                Read-PptxShapes -Shapes $shape.GroupItems -TextBlocks $TextBlocks -Tables $Tables -Title $Title
+                continue
+            }
+        } catch { }
+
+        # テキスト
+        try {
+            if ($shape.HasTextFrame -and $shape.TextFrame.HasText) {
+                $t = [string]$shape.TextFrame.TextRange.Text
+                if ($t) {
+                    $isTitle = $false
+                    try {
+                        # placeholder Type=1 は msoPlaceholderTitle、Type=13 は msoPlaceholderCenterTitle
+                        if ($shape.PlaceholderFormat -and ($shape.PlaceholderFormat.Type -eq 1 -or $shape.PlaceholderFormat.Type -eq 13)) {
+                            $isTitle = $true
+                        }
+                    } catch { }
+                    if ($isTitle -and -not $Title.Value) {
+                        $Title.Value = $t.Trim()
+                    } else {
+                        [void]$TextBlocks.Add($t)
+                    }
+                }
+            }
+        } catch { }
+
+        # 表
+        try {
+            if ($shape.HasTable) {
+                $rows = New-Object System.Collections.ArrayList
+                $tbl = $shape.Table
+                for ($r = 1; $r -le $tbl.Rows.Count; $r++) {
+                    $cells = New-Object System.Collections.ArrayList
+                    for ($c = 1; $c -le $tbl.Columns.Count; $c++) {
+                        $txt = ''
+                        try { $txt = [string]$tbl.Cell($r, $c).Shape.TextFrame.TextRange.Text } catch { }
+                        [void]$cells.Add($txt.Trim())
+                    }
+                    [void]$rows.Add(@($cells))
+                }
+                [void]$Tables.Add(@($rows))
+            }
+        } catch { }
+    }
+}
+
+# POST /tadori/pptx-extract
+# 入力: 生 PPTX バイナリ (Content-Type: application/octet-stream)
+#       Header `X-Tadori-Filename`: 元ファイル名 (任意。デバッグ用)
+# 出力: { ok, slides: [{ slideNo, title, pngBase64, rawText, tables, notes }] }
+function Invoke-PptxExtract {
+    param([System.Net.HttpListenerContext]$Context)
+    $response = $Context.Response
+    $request = $Context.Request
+
+    if ($request.HttpMethod.ToUpper() -ne 'POST') {
+        Send-Error -Response $response -Status 405 -Code 'method_not_allowed' -Detail 'POST のみ受付'; return
+    }
+
+    # バイナリ受領 (大きいので memory に直読み)
+    $ms = New-Object System.IO.MemoryStream
+    try { $request.InputStream.CopyTo($ms) } catch {
+        Send-Error -Response $response -Status 400 -Code 'read_error' -Detail $_.Exception.Message; return
+    }
+    $bytes = $ms.ToArray()
+    $ms.Dispose()
+    if ($bytes.Length -lt 100) {
+        Send-Error -Response $response -Status 400 -Code 'empty_body' -Detail 'PPTX バイナリが空または極端に小さい'; return
+    }
+
+    $origName = ''
+    try { $origName = [string]$request.Headers['X-Tadori-Filename'] } catch { }
+    if (-not $origName) { $origName = 'unknown.pptx' }
+
+    # PowerPoint COM は単一スレッド。Mutex で待機。
+    $hasLock = $false
+    try { $hasLock = $script:PptxComMutex.WaitOne([TimeSpan]::FromMinutes(5)) } catch { $hasLock = $false }
+    if (-not $hasLock) {
+        Send-Error -Response $response -Status 503 -Code 'mutex_timeout' -Detail '他の PPTX 取り込みが進行中 (5分待っても解放されず)'; return
+    }
+
+    $tempDir = Join-Path $env:TEMP ("tadori-pptx-" + [Guid]::NewGuid().ToString('N'))
+    $ppt = $null
+    $pres = $null
+    try {
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        $tempFile = Join-Path $tempDir 'input.pptx'
+        [IO.File]::WriteAllBytes($tempFile, $bytes)
+
+        $ppt = Get-PowerPointOrNull
+        if (-not $ppt) {
+            Send-Error -Response $response -Status 503 -Code 'no_powerpoint' -Detail 'PowerPoint を起動/接続できませんでした (Windows + PowerPoint が必要)'
+            return
+        }
+        # 取り込み時は不可視で。WithWindow=$false が指定できない場合、最小化フォールバック。
+        try { $ppt.WindowState = 2 } catch { } # ppWindowMinimized
+
+        # Open(FileName, ReadOnly, Untitled, WithWindow)
+        $pres = $ppt.Presentations.Open($tempFile, [bool]$true, [bool]$false, [bool]$false)
+
+        $slidesOut = New-Object System.Collections.ArrayList
+        $count = $pres.Slides.Count
+        Write-Host ("[pptx] extract: {0} ({1} slides)" -f $origName, $count)
+
+        for ($i = 1; $i -le $count; $i++) {
+            $slide = $pres.Slides.Item($i)
+            $pngPath = Join-Path $tempDir ("slide-{0}.png" -f $i)
+            try { $slide.Export($pngPath, "PNG", 1920, 1080) } catch {
+                Write-Host ("[pptx]   slide {0}: Export 失敗 — {1}" -f $i, $_.Exception.Message)
+                continue
+            }
+
+            $textBlocks = New-Object System.Collections.ArrayList
+            $tables = New-Object System.Collections.ArrayList
+            $title = ''
+            $titleRef = [ref]$title
+            try { Read-PptxShapes -Shapes $slide.Shapes -TextBlocks $textBlocks -Tables $tables -Title $titleRef } catch { }
+
+            # スピーカーノート (任意。HasNotesPage が false でも NotesPage は触れることがあるので try)
+            $notes = ''
+            try {
+                if ($slide.NotesPage -and $slide.NotesPage.Shapes) {
+                    foreach ($sh in $slide.NotesPage.Shapes) {
+                        try {
+                            if ($sh.PlaceholderFormat -and $sh.PlaceholderFormat.Type -eq 2) {  # msoPlaceholderBody
+                                if ($sh.HasTextFrame -and $sh.TextFrame.HasText) {
+                                    $notes = [string]$sh.TextFrame.TextRange.Text
+                                    break
+                                }
+                            }
+                        } catch { }
+                    }
+                }
+            } catch { }
+
+            $pngBytes = [IO.File]::ReadAllBytes($pngPath)
+            $pngB64 = [Convert]::ToBase64String($pngBytes)
+            Remove-Item -LiteralPath $pngPath -ErrorAction SilentlyContinue
+
+            [void]$slidesOut.Add(@{
+                slideNo   = $i
+                title     = [string]$titleRef.Value
+                pngBase64 = $pngB64
+                rawText   = (($textBlocks -join "`n").Trim())
+                tables    = @($tables)
+                notes     = $notes.Trim()
+            })
+        }
+
+        Write-Host ("[pptx]   done: {0} slides extracted" -f $slidesOut.Count)
+        Send-Json -Response $response -Status 200 -Body @{ ok = $true; count = $slidesOut.Count; slides = @($slidesOut) }
+    } catch {
+        Send-Error -Response $response -Status 500 -Code 'pptx_error' -Detail $_.Exception.Message
+    } finally {
+        if ($pres) { try { $pres.Close() } catch { } }
+        # PowerPoint 自体は Quit しない: 他のプレゼンが開いてる可能性 + 引用ジャンプで再利用するため。
+        # 取り込みごとに毎回 Quit すると重い。プロセスは relay 終了時に道連れになる想定。
+        try { [Runtime.InteropServices.Marshal]::ReleaseComObject($pres) | Out-Null } catch { }
+        try { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        if ($hasLock) { try { $script:PptxComMutex.ReleaseMutex() } catch { } }
+        [GC]::Collect()
+    }
+}
+
+# POST /tadori/pptx-open
+# 入力 JSON: { fileUrl: string, slideNo: int }
+#   fileUrl  : SP の絶対 URL (例: "https://contoso.sharepoint.com/sites/foo/.../manual.pptx")
+#              または直接開けるローカルパス
+#   slideNo  : 1-origin スライド番号
+# 動作: 既に開いてれば再利用、なければ Open。GotoSlide で該当スライドへ。最前面化。
+function Invoke-PptxOpen {
+    param([System.Net.HttpListenerContext]$Context)
+    $response = $Context.Response
+    $request = $Context.Request
+
+    if ($request.HttpMethod.ToUpper() -ne 'POST') {
+        Send-Error -Response $response -Status 405 -Code 'method_not_allowed' -Detail 'POST のみ受付'; return
+    }
+
+    $reader = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+    $bodyText = $reader.ReadToEnd()
+    $reader.Close()
+    $payload = $null
+    try { $payload = $bodyText | ConvertFrom-Json } catch {
+        Send-Error -Response $response -Status 400 -Code 'bad_json' -Detail 'JSON ボディを解釈できませんでした'; return
+    }
+    $fileUrl = [string]$payload.fileUrl
+    $slideNo = [int]([string]$payload.slideNo)
+    if (-not $fileUrl) { Send-Error -Response $response -Status 400 -Code 'bad_request' -Detail 'fileUrl 必須'; return }
+    if ($slideNo -lt 1) { $slideNo = 1 }
+
+    # Mutex (PowerPoint COM 単一スレッド)
+    $hasLock = $false
+    try { $hasLock = $script:PptxComMutex.WaitOne([TimeSpan]::FromMinutes(2)) } catch { $hasLock = $false }
+    if (-not $hasLock) {
+        Send-Error -Response $response -Status 503 -Code 'mutex_timeout' -Detail '他の PPTX 処理が進行中'; return
+    }
+
+    try {
+        $ppt = Get-PowerPointOrNull
+        if (-not $ppt) {
+            Send-Error -Response $response -Status 503 -Code 'no_powerpoint' -Detail 'PowerPoint を起動/接続できませんでした'
+            return
+        }
+        try { $ppt.Visible = $true } catch { }
+
+        # 既存プレゼン検索
+        $target = $null
+        try {
+            foreach ($p in $ppt.Presentations) {
+                $fn = [string]$p.FullName
+                # SP の HTTPS URL も FullName に出る (Office 2016+)
+                if ($fn -ieq $fileUrl) { $target = $p; break }
+                # ファイル名 fallback (URL エンコード差異など)
+                try {
+                    $a = Split-Path $fn -Leaf
+                    $b = Split-Path $fileUrl -Leaf
+                    if ($a -and $b -and ($a -ieq $b)) { $target = $p; break }
+                } catch { }
+            }
+        } catch { }
+
+        if (-not $target) {
+            # ReadOnly:$false, Untitled:$false, WithWindow:$true で開く (編集ビュー)
+            $target = $ppt.Presentations.Open($fileUrl, [bool]$false, [bool]$false, [bool]$true)
+        }
+
+        # ウィンドウをアクティブ化 + GotoSlide
+        try { $target.Windows.Item(1).Activate() } catch { }
+        try { $target.Windows.Item(1).View.GotoSlide([int]$slideNo) } catch { }
+
+        # PowerPoint を最前面に持ってくる (Win32)
+        try {
+            Add-Type -Namespace TadoriPptx -Name Win -MemberDefinition @"
+public static class Native {
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+}
+"@ -ErrorAction SilentlyContinue
+            $hwnd = [System.IntPtr]::new([int]$target.Windows.Item(1).HWND)
+            [TadoriPptx.Win+Native]::SetForegroundWindow($hwnd) | Out-Null
+        } catch { }
+
+        Write-Host ("[pptx] opened {0} at slide {1}" -f $fileUrl, $slideNo)
+        Send-Json -Response $response -Status 200 -Body @{ ok = $true; fileUrl = $fileUrl; slideNo = $slideNo }
+    } catch {
+        Send-Error -Response $response -Status 500 -Code 'pptx_open_error' -Detail $_.Exception.Message
+    } finally {
+        if ($hasLock) { try { $script:PptxComMutex.ReleaseMutex() } catch { } }
+    }
+}
+
+
 # ─── Request handler ────────────────────────────────────────────────────────
 
 function Invoke-RelayRequest {
@@ -1209,6 +1489,10 @@ function Invoke-RelayRequest {
     if ($path -eq '/tadori/onenote/links')     { Invoke-OneNoteLinks     -Context $Context; return }
     if ($path -eq '/tadori/onenote/tadori-outlines') { Invoke-OneNoteTadoriOutlines -Context $Context; return }
     if ($path -eq '/tadori/onenote/replace-outline') { Invoke-OneNoteReplaceOutline -Context $Context; return }
+
+    # ── ローカル機能: PPTX マニュアル取り込み (Vision LLM 連携用) ──
+    if ($path -eq '/tadori/pptx-extract') { Invoke-PptxExtract -Context $Context; return }
+    if ($path -eq '/tadori/pptx-open')    { Invoke-PptxOpen    -Context $Context; return }
 
     # ── 開発者モード: ローカル dist のバンドル配信 (loader が読む) ──
     if ($path -eq '/tadori/tadori.bundle.js') {
