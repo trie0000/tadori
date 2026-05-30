@@ -314,8 +314,10 @@ export async function syncPptxFolder(
   if (opts.targetFiles) console.log(`[tadori] pptx sync: 個別ファイル再取込モード — 対象 ${opts.targetFiles.size} ファイル`);
   else if (opts.force) console.log('[tadori] pptx sync: 強制再取り込みモード — 全 pptx を再解析');
 
-  // サムネは <pptx-folder>/.tadori-thumbs に集約 (1 フォルダ運用想定)
-  const thumbFolderServerRel = `${folderServerRel}/.tadori-thumbs`;
+  // サムネは Tadori 管理フォルダ配下 (<site>/Shared Documents/Tadori/pptx-thumbs) に集約。
+  // ★ オリジナルの PPTX フォルダには一切ファイルを作らない (ユーザの資料置き場を汚さない)。
+  //   セグメント (manifest/seg-*.json) と同じ Tadori フォルダ配下にまとめる。
+  const thumbFolderServerRel = (await getEngine(siteUrl)).store.pptxThumbFolder;
 
   // 3. 削除されたファイルの chunk を消す
   let deletedFiles = 0;

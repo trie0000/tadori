@@ -482,8 +482,9 @@ export class SharePointClient {
             for (const f of j.value ?? []) {
               const n = (f.Name ?? '').trim();
               const sru = (f.ServerRelativeUrl ?? '').trim();
-              // SharePoint の隠しフォルダ (Forms 等) と先頭 _ はスキップ
-              if (!sru || n === 'Forms' || n.startsWith('_') || n === '.tadori-thumbs') continue;
+              // SharePoint の隠しフォルダ (Forms 等) と先頭 _ はスキップ。
+              // 旧版が PPTX フォルダ内に作っていた .tadori-thumbs も除外 (移行期の保険)。
+              if (!sru || n === 'Forms' || n.startsWith('_') || n === '.tadori-thumbs' || n === 'pptx-thumbs') continue;
               queue.push({ path: sru, depth: depth + 1, isRoot: false });
             }
           } else {

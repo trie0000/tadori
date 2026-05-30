@@ -23,6 +23,12 @@ export class SpVectorStore {
     await this.sp.ensureFolder(this.folder);
   }
 
+  /** Tadori 管理フォルダ (site 込み server-relative)。PPTX サムネ等の配置基準に使う。 */
+  get rootFolder(): string { return this.folder; }
+
+  /** PPTX サムネ置き場 (Tadori 管理フォルダ配下)。オリジナルの PPTX フォルダは汚さない。 */
+  get pptxThumbFolder(): string { return `${this.folder}/pptx-thumbs`; }
+
   async readManifest(): Promise<Manifest | null> {
     const text = await this.sp.readFileText(`${this.folder}/${MANIFEST_NAME}`);
     if (text == null) return null;
