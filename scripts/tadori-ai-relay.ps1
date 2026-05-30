@@ -1412,8 +1412,11 @@ function Invoke-PptxOpen {
         } catch { }
 
         if (-not $target) {
-            # ReadOnly:$false, Untitled:$false, WithWindow:$true で開く (編集ビュー)
-            $target = $ppt.Presentations.Open($fileUrl, [bool]$false, [bool]$false, [bool]$true)
+            # 引用ジャンプは「出典スライドの閲覧」が目的なので ReadOnly:$true で開く。
+            # オリジナルファイルを Tadori 起因で書き換えないための安全策
+            # (ユーザが誤って上書き保存する事故も防ぐ)。
+            # Open(FileName, ReadOnly, Untitled, WithWindow)
+            $target = $ppt.Presentations.Open($fileUrl, [bool]$true, [bool]$false, [bool]$true)
         }
 
         # ウィンドウをアクティブ化 + GotoSlide
