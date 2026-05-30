@@ -117,8 +117,15 @@ function filterPptxFiles(items: FileInfo[]): FileInfo[] {
 }
 
 /** 増分判定: 前回 perFile と今回 SP の lastModified を比較。
- *  force=true なら全ファイルを toIngest にまとめる (Vision モデル変更時の再解析用)。 */
-function pickTargets(now: FileInfo[], prev: Record<string, string>, force = false): {
+ *  force=true なら全ファイルを toIngest にまとめる (Vision モデル変更時の再解析用)。
+ *  targetFiles を指定すると、その名前に一致するファイルだけを toIngest に入れる
+ *  (個別ファイル再取り込み用。force と併用すれば lastModified 無視で再処理)。 */
+function pickTargets(
+  now: FileInfo[],
+  prev: Record<string, string>,
+  force = false,
+  targetFiles?: ReadonlySet<string>,
+): {
   toIngest: FileInfo[];
   skipped: FileInfo[];
   deleted: string[];   // ファイル名 (今回 SP に無いもの)
@@ -128,13 +135,18 @@ function pickTargets(now: FileInfo[], prev: Record<string, string>, force = fals
   const nowNames = new Set<string>();
   for (const f of now) {
     nowNames.add(f.name);
+    // 指定ファイルのみモード: target に無いファイルは触らない (skipped 扱いに)
+    if (targetFiles && !targetFiles.has(f.name)) { skipped.push(f); continue; }
     if (force) { toIngest.push(f); continue; }
     const prevTs = prev[f.name];
     if (!prevTs || prevTs !== f.timeLastModified) toIngest.push(f);
     else skipped.push(f);
   }
+  // 削除検知は「フォルダ全体同期」のときだけ行う。個別ファイル再取込時は他ファイルを巻き込まない。
   const deleted: string[] = [];
-  for (const name of Object.keys(prev)) if (!nowNames.has(name)) deleted.push(name);
+  if (!targetFiles) {
+    for (const name of Object.keys(prev)) if (!nowNames.has(name)) deleted.push(name);
+  }
   return { toIngest, skipped, deleted };
 }
 
@@ -255,14 +267,17 @@ function findExistingMessageIds(eng: Awaited<ReturnType<typeof getEngine>>, serv
 
 /** 1 フォルダ分の取り込み (新規 / 更新ファイル + 削除検知)。
  *  force=true なら lastModified によるスキップを無効化し、全 pptx を再解析する
- *  (Vision モデル変更で再分析したい場合等)。Vision LLM のコストが再発生する点に注意。 */
+ *  (Vision モデル変更で再分析したい場合等)。
+ *  targetFiles を指定すると、その名前 (Set) に一致するファイルだけ再処理する
+ *  (個別ファイル再取込)。force=true と併用が前提。削除検知はスキップ。
+ *  Vision LLM のコストが再発生する点に注意。 */
 export async function syncPptxFolder(
   folder: PptxFolderConfig,
   s: RuntimeSettings,
   fallbackSiteUrl: string,
   onProgress?: (p: PptxIngestProgress) => void,
   signal?: AbortSignal,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; targetFiles?: ReadonlySet<string> } = {},
 ): Promise<PptxIngestResult> {
   const { siteUrl, folderServerRel } = resolveSpFolder(folder.url, fallbackSiteUrl);
   const sp = new SharePointClient(siteUrl);
@@ -288,9 +303,12 @@ export async function syncPptxFolder(
     });
   }
 
-  // 2. 増分判定 & 削除検知 (force=true で全ファイル再取り込み)
-  const { toIngest, skipped, deleted } = pickTargets(pptxFiles, folder.perFile, opts.force === true);
-  if (opts.force) console.log('[tadori] pptx sync: 強制再取り込みモード — 全 pptx を再解析');
+  // 2. 増分判定 & 削除検知 (force=true で全ファイル再取り込み、targetFiles で個別指定)
+  const { toIngest, skipped, deleted } = pickTargets(
+    pptxFiles, folder.perFile, opts.force === true, opts.targetFiles,
+  );
+  if (opts.targetFiles) console.log(`[tadori] pptx sync: 個別ファイル再取込モード — 対象 ${opts.targetFiles.size} ファイル`);
+  else if (opts.force) console.log('[tadori] pptx sync: 強制再取り込みモード — 全 pptx を再解析');
 
   // サムネは <pptx-folder>/.tadori-thumbs に集約 (1 フォルダ運用想定)
   const thumbFolderServerRel = `${folderServerRel}/.tadori-thumbs`;
@@ -318,9 +336,19 @@ export async function syncPptxFolder(
   let ingestedFiles = 0;
   let ingestedSlides = 0;
   let failedSlides = 0;
+  // perFile の更新方針:
+  //   - 通常同期 (targetFiles 無し): SP の現在の lastModified をそのまま採用
+  //     (toIngest = 取込済み更新、skipped = 取込不要)
+  //   - 個別再取込 (targetFiles 有り): target 外のファイルは **旧 perFile の値を保持**
+  //     (実際に再処理していないのに「処理済み」と誤認しないため)
   const newPerFile: Record<string, string> = {};
-  // skipped はそのまま perFile に残す (今回触らない)
-  for (const f of skipped) newPerFile[f.name] = f.timeLastModified;
+  if (opts.targetFiles) {
+    // 既存値をベースに、target に含まれるファイルだけ後で上書きする
+    for (const [name, ts] of Object.entries(folder.perFile)) newPerFile[name] = ts;
+  } else {
+    // 通常同期: skipped (= 今回触らないが SP には居る) は SP の現在値で更新
+    for (const f of skipped) newPerFile[f.name] = f.timeLastModified;
+  }
 
   for (let i = 0; i < toIngest.length; i++) {
     if (signal?.aborted) break;

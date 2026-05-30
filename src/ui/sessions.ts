@@ -44,29 +44,52 @@ export interface ChatSession {
   turns: SavedTurn[];
 }
 
-const KEY = 'tadori:chat-sessions';
+// チャット履歴はサイト別に分離。旧 'tadori:chat-sessions' グローバルキーは
+// 初回読込時に現在サイトへ移管 (1 回だけ)。
+import { siteHash } from '../sharepoint/spSites';
+
+const LEGACY_KEY = 'tadori:chat-sessions';
+const MIGRATED_KEY = 'tadori:chat-sessions:legacy-migrated';
 const MAX_SESSIONS = 50;
 
-function lsGet(): ChatSession[] {
+function keyFor(siteUrl: string): string {
+  return `tadori:chat-sessions:${siteHash(siteUrl)}`;
+}
+
+function migrateLegacy(siteUrl: string): void {
   try {
-    const raw = localStorage.getItem(KEY);
+    if (localStorage.getItem(MIGRATED_KEY)) return;
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (!legacy) { localStorage.setItem(MIGRATED_KEY, '1'); return; }
+    const cur = localStorage.getItem(keyFor(siteUrl));
+    if (!cur) localStorage.setItem(keyFor(siteUrl), legacy);
+    localStorage.removeItem(LEGACY_KEY);
+    localStorage.setItem(MIGRATED_KEY, '1');
+    console.log('[tadori] chat sessions: legacy 履歴を現在サイトへ移管しました');
+  } catch { /* noop */ }
+}
+
+function lsGet(siteUrl: string): ChatSession[] {
+  try {
+    migrateLegacy(siteUrl);
+    const raw = localStorage.getItem(keyFor(siteUrl));
     if (!raw) return [];
     const arr = JSON.parse(raw) as ChatSession[];
     return Array.isArray(arr) ? arr : [];
   } catch { return []; }
 }
 
-function lsSet(list: ChatSession[]): void {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* quota */ }
+function lsSet(siteUrl: string, list: ChatSession[]): void {
+  try { localStorage.setItem(keyFor(siteUrl), JSON.stringify(list)); } catch { /* quota */ }
 }
 
 /** 更新日時の新しい順。 */
-export function listSessions(): ChatSession[] {
-  return lsGet().sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+export function listSessions(siteUrl: string): ChatSession[] {
+  return lsGet(siteUrl).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function getSession(id: string): ChatSession | undefined {
-  return lsGet().find(s => s.id === id);
+export function getSession(siteUrl: string, id: string): ChatSession | undefined {
+  return lsGet(siteUrl).find(s => s.id === id);
 }
 
 export function newSessionId(): string {
@@ -79,8 +102,8 @@ function titleFrom(q: string): string {
 }
 
 /** turn を追記 (セッションが無ければ作成)。タイトルは最初の質問から。返り値は保存後のセッション。 */
-export function appendTurn(id: string, turn: SavedTurn): ChatSession {
-  const list = lsGet();
+export function appendTurn(siteUrl: string, id: string, turn: SavedTurn): ChatSession {
+  const list = lsGet(siteUrl);
   let s = list.find(x => x.id === id);
   if (!s) {
     s = { id, title: titleFrom(turn.q), updatedAt: new Date().toISOString(), turns: [] };
@@ -89,22 +112,21 @@ export function appendTurn(id: string, turn: SavedTurn): ChatSession {
   if (s.turns.length === 0) s.title = titleFrom(turn.q);
   s.turns.push(turn);
   s.updatedAt = new Date().toISOString();
-  // 上限を超えたら古いものから捨てる
   list.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-  lsSet(list.slice(0, MAX_SESSIONS));
+  lsSet(siteUrl, list.slice(0, MAX_SESSIONS));
   return s;
 }
 
-export function setTitle(id: string, title: string): void {
+export function setTitle(siteUrl: string, id: string, title: string): void {
   const t = title.trim();
   if (!t) return;
-  const list = lsGet();
+  const list = lsGet(siteUrl);
   const s = list.find(x => x.id === id);
   if (!s) return;
   s.title = t.slice(0, 40);
-  lsSet(list);
+  lsSet(siteUrl, list);
 }
 
-export function deleteSession(id: string): void {
-  lsSet(lsGet().filter(s => s.id !== id));
+export function deleteSession(siteUrl: string, id: string): void {
+  lsSet(siteUrl, lsGet(siteUrl).filter(s => s.id !== id));
 }

@@ -134,7 +134,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
   function refreshList(): void {
     sessionList.replaceChildren();
-    const sessions = listSessions();
+    const sessions = listSessions(siteUrl);
     if (sessions.length === 0) {
       sessionList.appendChild(el('div', { class: 'tdr-session-empty' }, ['履歴はまだありません']));
       return;
@@ -164,7 +164,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
           primaryLabel: '削除',
           primaryVariant: 'danger',
           onConfirm: () => {
-            deleteSession(s.id);
+            deleteSession(siteUrl, s.id);
             if (s.id === currentId) startNewSession();
             else refreshList();
           },
@@ -184,7 +184,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const commit = (save: boolean): void => {
       if (done) return; done = true;
       const v = inp.value.trim();
-      if (save && v && v !== current) setTitle(id, v);
+      if (save && v && v !== current) setTitle(siteUrl, id, v);
       refreshList(); // 元の DOM に戻す
     };
     inp.addEventListener('keydown', (e) => {
@@ -205,7 +205,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   }
 
   function openSession(id: string): void {
-    const s = getSession(id);
+    const s = getSession(siteUrl, id);
     if (!s) return;
     abort?.abort();
     currentId = id;
@@ -286,7 +286,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   function searchSessions(q: string): Array<{ session: ChatSession; matches: number; snippet: string }> {
     const ql = q.toLowerCase();
     const out: Array<{ session: ChatSession; matches: number; snippet: string }> = [];
-    for (const s of listSessions()) {
+    for (const s of listSessions(siteUrl)) {
       let matches = 0;
       let snippet = '';
       if (s.title.toLowerCase().includes(ql)) { matches++; if (!snippet) snippet = s.title; }
@@ -832,7 +832,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
   /** 直近 3 ターンを履歴として渡す (フォローアップ質問の文脈用)。回答はトリム。 */
   function buildHistory(): ChatHistoryMsg[] {
-    const sess = getSession(currentId);
+    const sess = getSession(siteUrl, currentId);
     if (!sess) return [];
     const out: ChatHistoryMsg[] = [];
     for (const t of sess.turns.slice(-3)) {
@@ -884,8 +884,8 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       const ms = Math.round(performance.now() - t0);
       finalizeTurn(refs, full, hits, ms, s.relayBaseUrl, opts.displayQ, yen, createdAt);
       if (suggestions.length) renderSuggest(refs.aBody, suggestions);
-      const saved = appendTurn(currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
-      if (saved.turns.length === 1 && aiTitle) setTitle(currentId, aiTitle);
+      const saved = appendTurn(siteUrl, currentId, { q: opts.displayQ, answer: full, hits, ms, yen, createdAt });
+      if (saved.turns.length === 1 && aiTitle) setTitle(siteUrl, currentId, aiTitle);
       refreshList();
       // AI が OneNote 追記候補を出した場合は、回答 finalize 直後に確認モーダルを自動で開く。
       // 旧仕様の「回答下に通知バーを置いて 1 クリック」よりも 1 アクション減る。

@@ -838,8 +838,53 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
         title: '更新時刻に関係なく全 pptx を再解析 (Vision モデル変更時など)',
       }, ['強制再取り込み']);
       const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
-      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, forceBtn, delBtn]);
-      const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [head, meta, actions]);
+      // ファイル一覧を折り畳み表示 (perFile = 取込済みファイル一覧から構築)
+      const fileNames = Object.keys(f.perFile).sort();
+      const filesBody = el('div', { class: 'tdr-pptx-files', style: 'display:none;margin-top:var(--s-2);border-top:1px solid var(--line);padding-top:var(--s-2)' });
+      const filesToggle = el('button', {
+        class: 'tdr-btn', style: 'font-size:var(--fs-sm)',
+        title: '取り込み済みファイル一覧を表示',
+      }, [`ファイル (${fileNames.length})`]);
+      filesToggle.addEventListener('click', () => {
+        const open = filesBody.style.display !== 'none';
+        filesBody.style.display = open ? 'none' : '';
+      });
+      if (fileNames.length === 0) {
+        filesBody.appendChild(el('div', { class: 'tdr-hint' }, ['まだ取り込み済みファイルはありません。「同期」を実行してください。']));
+      } else {
+        for (const fname of fileNames) {
+          const ts = f.perFile[fname];
+          const tsLabel = ts ? new Date(ts).toLocaleString() : '?';
+          const reBtn = el('button', {
+            class: 'tdr-btn', style: 'font-size:var(--fs-xs);padding:2px 8px',
+            title: `${fname} だけを再解析 (現在の Vision モデルで)`,
+          }, ['再取込']);
+          reBtn.addEventListener('click', () => {
+            const visionModel = loadSettings().visionModel;
+            confirmModal({
+              root,
+              title: '個別ファイル再取込',
+              message:
+                `${fname} を再解析します。\n` +
+                `Vision モデル: ${visionModel}\n\n` +
+                `Vision LLM のコストが再発生します (1 スライド ≒ 1 円)。`,
+              primaryLabel: '再取込',
+              primaryVariant: 'danger',
+              onConfirm: () => { void runSync([f], { force: true, targetFiles: new Set([fname]) }); },
+            });
+          });
+          const row = el('div', {
+            style: 'display:flex;align-items:center;gap:var(--s-2);padding:4px 0;font-size:var(--fs-sm);border-bottom:1px solid var(--line);',
+          }, [
+            el('span', { class: 'mono', style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, [fname]),
+            el('span', { class: 'tdr-hint', style: 'font-size:var(--fs-xs);white-space:nowrap' }, [tsLabel]),
+            reBtn,
+          ]);
+          filesBody.appendChild(row);
+        }
+      }
+      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2);align-items:center' }, [syncBtn, forceBtn, filesToggle, delBtn]);
+      const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [head, meta, actions, filesBody]);
 
       syncBtn.addEventListener('click', () => { void runSync([f]); });
       forceBtn.addEventListener('click', () => {
@@ -884,7 +929,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
     toast(root, 'フォルダを追加しました。「同期」ボタンで取り込みを開始してください', 'ok');
   });
 
-  async function runSync(folders: PptxFolderConfig[], runOpts: { force?: boolean } = {}): Promise<void> {
+  async function runSync(folders: PptxFolderConfig[], runOpts: { force?: boolean; targetFiles?: ReadonlySet<string> } = {}): Promise<void> {
     if (ac) return;
     ac = new AbortController();
     syncAllBtn.style.display = 'none'; stopBtn.style.display = '';
@@ -894,7 +939,9 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
       for (let i = 0; i < folders.length; i++) {
         if (ac.signal.aborted) break;
         const f = folders[i];
-        const tag = runOpts.force ? '【強制再取り込み】 ' : '';
+        const tag = runOpts.targetFiles
+          ? `【個別再取込: ${[...runOpts.targetFiles].slice(0, 2).join(',')}${runOpts.targetFiles.size > 2 ? '…' : ''}】 `
+          : runOpts.force ? '【強制再取り込み】 ' : '';
         status.textContent = `${tag}[${i + 1}/${folders.length}] ${f.label || deriveLabel(f.url)} を同期中…`;
         const r = await syncPptxFolder(
           f, draft, siteUrl,
@@ -909,7 +956,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
             }
           },
           ac.signal,
-          { force: runOpts.force },
+          { force: runOpts.force, targetFiles: runOpts.targetFiles },
         );
         totalIngested += r.ingestedSlides;
         totalSkipped += r.skippedFiles;
