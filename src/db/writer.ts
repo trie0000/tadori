@@ -33,6 +33,8 @@ export interface IngestMail {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
+  /** ソース内容ハッシュ (差分 Vision 判定用)。 */
+  srcHash?: string;
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -167,6 +169,7 @@ export async function ingestToSegments(
       slideNo: m.slideNo,
       slideTitle: m.slideTitle,
       thumbServerRelUrl: m.thumbServerRelUrl,
+      srcHash: m.srcHash,
       emb: encodeEmbedding(normalize(vecs[i])),
     }));
 

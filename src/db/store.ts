@@ -51,6 +51,8 @@ export interface MailRecord {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
+  /** ソース内容ハッシュ (差分 Vision 判定用)。 */
+  srcHash?: string;
 }
 
 export interface DbHit {
@@ -68,6 +70,18 @@ export class VectorDb {
   get watermark(): number { return this.maxSeq; }
 
   has(messageId: string): boolean { return this.records.has(messageId); }
+
+  /** messageId でレコードを取得 (無ければ undefined)。PPTX 差分判定で srcHash を引く用。 */
+  get(messageId: string): MailRecord | undefined { return this.records.get(messageId); }
+
+  /** 指定 conversationId (= pptx の serverRelativeUrl) に属する messageId 一覧。 */
+  messageIdsForConversation(conversationId: string): string[] {
+    const out: string[] = [];
+    for (const r of this.records.values()) {
+      if (r.conversationId === conversationId) out.push(r.messageId);
+    }
+    return out;
+  }
 
   applySegment(seg: Segment): void {
     const recs = [...seg.records].sort((a, b) => a.seq - b.seq);
@@ -103,6 +117,7 @@ export class VectorDb {
         slideNo: r.slideNo,
         slideTitle: r.slideTitle,
         thumbServerRelUrl: r.thumbServerRelUrl,
+        srcHash: r.srcHash,
       });
     }
     this.appliedSeq.set(r.messageId, r.seq);

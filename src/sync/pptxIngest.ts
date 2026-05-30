@@ -56,12 +56,16 @@ export interface PptxIngestProgress {
 export interface PptxIngestResult {
   /** 取り込みが走った (新規 or 更新) ファイル数。 */
   ingestedFiles: number;
-  /** 取り込みが走った総スライド数 (= 新規 chunk 数)。 */
+  /** 取り込みが走った総スライド数 (= Vision 実行した新規 chunk 数)。 */
   ingestedSlides: number;
+  /** 内容ハッシュ一致で Vision/embed をスキップしたスライド数 (差分取込の節約分)。 */
+  skippedSlides: number;
   /** lastModified 一致でスキップしたファイル数。 */
   skippedFiles: number;
   /** 削除されたファイル (SP から消えていた)。 */
   deletedFiles: number;
+  /** ファイル内で削除されたスライド数 (新版で消えたページ → 検索からも削除)。 */
+  deletedSlides: number;
   /** Vision 等で失敗したスライド数。 */
   failedSlides: number;
 }
@@ -198,12 +202,25 @@ export async function openPptxAtSlide(
   }
 }
 
+/** スライドのソース内容ハッシュ (title + rawText + tables + notes)。
+ *  PNG は対象外 (Shape テキストが同じなら図も同じとみなす — Export 結果はレイアウト
+ *  非変化なら同一になるが、毎回バイト一致は保証されないので軽量側のテキストで判定)。
+ *  djb2 + base36。Vision モデル ID は含めない (force 再取込で別管理するため)。 */
+function slideSrcHash(slide: PptxSlide): string {
+  const tablesStr = (slide.tables || []).map(t => t.map(row => row.join('')).join('')).join('');
+  const s = `${slide.title || ''} ${slide.rawText || ''} ${tablesStr} ${slide.notes || ''}`;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 /** 1 スライド → IngestMail (markdown 化 + メタ付与)。 */
 function slideToIngestMail(
   fileInfo: FileInfo,
   slide: PptxSlide,
   markdown: string,
   thumbServerRelUrl: string,
+  srcHash: string,
 ): IngestMail {
   const subject = slide.title?.trim() || `スライド ${slide.slideNo}`;
   const docPath = `pptx://${fileInfo.serverRelativeUrl}#${slide.slideNo}`;
@@ -228,6 +245,7 @@ function slideToIngestMail(
     slideNo: slide.slideNo,
     slideTitle: subject,
     thumbServerRelUrl,
+    srcHash,
   };
 }
 
@@ -249,20 +267,6 @@ async function uploadThumb(
     console.warn('[pptx] thumb upload failed:', (e as Error).message);
     return '';
   }
-}
-
-/** ファイル名から既存の DB レコード (kind='pptx', conversationId=serverRelUrl) の messageId 群を抽出。
- *  ファイル削除時の chunk 削除や、スライド数縮小時の余剰削除に使う。 */
-function findExistingMessageIds(eng: Awaited<ReturnType<typeof getEngine>>, serverRelUrl: string): string[] {
-  const out: string[] = [];
-  // VectorDb の内部走査用 API は提供されてないので、records は engine.db を直接覗く設計。
-  // ここでは安全に、kind='pptx' && conversationId === serverRelUrl のレコードを探す。
-  const db = eng.db as unknown as { records: Map<string, { messageId: string; kind?: string; conversationId?: string }> };
-  if (!db.records || typeof db.records.forEach !== 'function') return out;
-  db.records.forEach((r) => {
-    if (r.kind === 'pptx' && r.conversationId === serverRelUrl) out.push(r.messageId);
-  });
-  return out;
 }
 
 /** 1 フォルダ分の取り込み (新規 / 更新ファイル + 削除検知)。
@@ -322,7 +326,7 @@ export async function syncPptxFolder(
       onProgress?.({ file: fname, fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0, phase: 'delete', message: `${fname} は SP から消えていた — chunk を削除` });
       // serverRelativeUrl がフォルダ内なので組み立て可
       const stale = `${folderServerRel}/${fname}`;
-      const messageIds = findExistingMessageIds(eng, stale);
+      const messageIds = eng.db.messageIdsForConversation(stale);
       for (const mid of messageIds) {
         try { await deleteFromSegments(mid, siteUrl); } catch (e) {
           console.warn('[pptx] delete chunk failed:', mid, (e as Error).message);
@@ -335,6 +339,8 @@ export async function syncPptxFolder(
   // 4. 各ファイル取り込み
   let ingestedFiles = 0;
   let ingestedSlides = 0;
+  let skippedSlides = 0;
+  let deletedSlides = 0;
   let failedSlides = 0;
   // perFile の更新方針:
   //   - 通常同期 (targetFiles 無し): SP の現在の lastModified をそのまま採用
@@ -369,23 +375,45 @@ export async function syncPptxFolder(
       onProgress?.({ file: f.name, fileIdx, fileTotal, slideIdx: 0, slideTotal: 0, phase: 'extract', message: `${f.name} を PowerPoint で解析中…` });
       const slides = await callPptxExtract(s.relayBaseUrl, bytes, f.name, signal);
 
-      // 既存 chunk のうち、新版で消えるスライド (例: 元 10 枚 → 8 枚) を先に削除
+      // 差分判定用に既存レコードを引く (messageId → srcHash)。
+      // force=true (強制 / 個別再取込) のときは差分スキップせず全スライド Vision。
+      const eng = await getEngine(siteUrl);
+      const willHave = new Set(slides.map(sl => `pptx://${f.serverRelativeUrl}#${sl.slideNo}`));
+
+      // 削除されたスライド (新版に無い既存 messageId) を検索 DB から除去
       try {
-        const eng = await getEngine(siteUrl);
-        const existing = findExistingMessageIds(eng, f.serverRelativeUrl);
-        const willHave = new Set(slides.map(sl => `pptx://${f.serverRelativeUrl}#${sl.slideNo}`));
+        const existing = eng.db.messageIdsForConversation(f.serverRelativeUrl);
         for (const mid of existing) {
           if (!willHave.has(mid)) {
-            try { await deleteFromSegments(mid, siteUrl); } catch (e) { console.warn('[pptx] prune stale slide:', mid, (e as Error).message); }
+            try { await deleteFromSegments(mid, siteUrl); deletedSlides++; }
+            catch (e) { console.warn('[pptx] prune stale slide:', mid, (e as Error).message); }
           }
         }
       } catch { /* engine 未初期化等は無視 (初回) */ }
 
-      // 各スライドを Vision LLM で markdown 化 + サムネアップロード
+      // 各スライド: 内容ハッシュが既存と一致なら Vision/embed をスキップ (差分取込)。
       const mails: IngestMail[] = [];
       for (let j = 0; j < slides.length; j++) {
         if (signal?.aborted) break;
         const slide = slides[j];
+        const mid = `pptx://${f.serverRelativeUrl}#${slide.slideNo}`;
+        const hash = slideSrcHash(slide);
+
+        // 差分判定: force でなく、既存レコードの srcHash と一致 → スキップ
+        if (!opts.force) {
+          const existingRec = eng.db.get(mid);
+          if (existingRec && existingRec.srcHash && existingRec.srcHash === hash) {
+            skippedSlides++;
+            onProgress?.({
+              file: f.name, fileIdx, fileTotal,
+              slideIdx: j + 1, slideTotal: slides.length,
+              phase: 'skip',
+              message: `${f.name} スライド ${j + 1}/${slides.length} は変更なし — スキップ`,
+            });
+            continue;
+          }
+        }
+
         onProgress?.({
           file: f.name, fileIdx, fileTotal,
           slideIdx: j + 1, slideTotal: slides.length,
@@ -398,7 +426,7 @@ export async function syncPptxFolder(
           // サムネ (Vision 用と同じ PNG をそのまま保存。縮小は将来課題)
           const pngBytes = Uint8Array.from(atob(slide.pngBase64), c => c.charCodeAt(0)).buffer;
           const thumbUrl = await uploadThumb(sp, thumbFolderServerRel, f, slide.slideNo, pngBytes);
-          mails.push(slideToIngestMail(f, slide, v.markdown, thumbUrl));
+          mails.push(slideToIngestMail(f, slide, v.markdown, thumbUrl, hash));
         } catch (e) {
           if ((e as Error).name === 'AbortError') throw e;
           console.warn('[pptx] vision/thumb failed:', f.name, slide.slideNo, (e as Error).message);
@@ -415,14 +443,15 @@ export async function syncPptxFolder(
         });
         await ingestToSegments(mails, s, siteUrl, undefined, signal);
         ingestedSlides += mails.length;
-        ingestedFiles++;
       }
+      // 何か処理した (新規/更新 or 削除) ファイルをカウント
+      if (mails.length > 0 || deletedSlides > 0) ingestedFiles++;
       newPerFile[f.name] = f.timeLastModified;
       onProgress?.({
         file: f.name, fileIdx, fileTotal,
         slideIdx: slides.length, slideTotal: slides.length,
         phase: 'done',
-        message: `${f.name} 完了 (${mails.length}/${slides.length} スライド)`,
+        message: `${f.name} 完了 (更新 ${mails.length} / スキップ ${slides.length - mails.length - failedSlides} / 全 ${slides.length} スライド)`,
       });
     } catch (e) {
       if ((e as Error).name === 'AbortError') throw e;
@@ -444,8 +473,10 @@ export async function syncPptxFolder(
   return {
     ingestedFiles,
     ingestedSlides,
+    skippedSlides,
     skippedFiles: skipped.length,
     deletedFiles,
+    deletedSlides,
     failedSlides,
   };
 }

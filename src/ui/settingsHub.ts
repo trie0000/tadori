@@ -934,7 +934,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
     ac = new AbortController();
     syncAllBtn.style.display = 'none'; stopBtn.style.display = '';
     showBar(0);
-    let totalIngested = 0, totalSkipped = 0, totalDeleted = 0, totalFailed = 0;
+    let totalIngested = 0, totalSkippedSlides = 0, totalDeletedSlides = 0, totalFailed = 0;
     try {
       for (let i = 0; i < folders.length; i++) {
         if (ac.signal.aborted) break;
@@ -959,12 +959,12 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
           { force: runOpts.force, targetFiles: runOpts.targetFiles },
         );
         totalIngested += r.ingestedSlides;
-        totalSkipped += r.skippedFiles;
-        totalDeleted += r.deletedFiles;
+        totalSkippedSlides += r.skippedSlides;
+        totalDeletedSlides += r.deletedSlides;
         totalFailed += r.failedSlides;
       }
       showBar(100);
-      const msg = `完了: 新規/更新 ${totalIngested} スライド / スキップ ${totalSkipped} ファイル / 削除 ${totalDeleted} ファイル${totalFailed ? ` / 失敗 ${totalFailed} スライド` : ''}`;
+      const msg = `完了: Vision 実行 ${totalIngested} スライド / 変更なしスキップ ${totalSkippedSlides} / 削除 ${totalDeletedSlides}${totalFailed ? ` / 失敗 ${totalFailed}` : ''} スライド`;
       status.textContent = msg;
       toast(root, msg, totalFailed ? 'warn' : 'ok');
       renderList(); // perFile が更新されているので再描画

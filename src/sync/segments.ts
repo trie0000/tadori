@@ -27,6 +27,10 @@ export interface SegmentRecord {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
+  /** ソース内容のハッシュ (pptx: title+rawText+tables+notes)。
+   *  再取り込み時に「内容が変わっていないスライドは Vision/embed をスキップ」
+   *  する差分判定に使う。 */
+  srcHash?: string;
   /** 親ドキュメント内のチャンク番号 (0 始まり)。単一レコードならどちらも省略。 */
   chunkIdx?: number;
   /** 親ドキュメントの総チャンク数。 */
