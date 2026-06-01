@@ -1107,23 +1107,31 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         }
       });
       head.appendChild(openBtn);
-    } else if (kind === 'transcript' && (h.recordingServerRelUrl || h.vttServerRelUrl)) {
-      // Teams 会議録: 録画があれば該当時刻から再生、無ければ .vtt をブラウザ表示。
-      const openBtn = el('button', {
-        class: 'tdr-hit-open',
-        'aria-label': h.recordingServerRelUrl ? '録画を該当時刻から開く' : '文字起こしを開く',
-        title: h.recordingServerRelUrl ? '録画を該当時刻から開く' : '文字起こし (.vtt) を開く',
-        html: icons.external(14),
-      });
-      openBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openTranscriptSource({
-          recordingServerRelUrl: h.recordingServerRelUrl,
-          vttServerRelUrl: h.vttServerRelUrl,
-          startSec: h.startSec,
+    } else if (kind === 'transcript') {
+      // Teams 会議録: 録画 (.mp4) は無いことが多いので、.vtt を開くのを基本動作にする。
+      // 録画が紐付いている場合のみ「録画」ボタンも追加で出す。
+      if (h.recordingServerRelUrl) {
+        const recBtn = el('button', {
+          class: 'tdr-hit-open', 'aria-label': '録画を該当時刻から開く', title: '録画を該当時刻から開く',
+          html: icons.external(14),
         });
-      });
-      head.appendChild(openBtn);
+        recBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openTranscriptSource({ recordingServerRelUrl: h.recordingServerRelUrl, startSec: h.startSec });
+        });
+        head.appendChild(recBtn);
+      }
+      if (h.vttServerRelUrl) {
+        const vttBtn = el('button', {
+          class: 'tdr-hit-open', 'aria-label': '文字起こし (.vtt) を開く', title: '文字起こしファイル (.vtt) をブラウザで開く',
+          html: icons.message(14),
+        });
+        vttBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openTranscriptSource({ vttServerRelUrl: h.vttServerRelUrl });
+        });
+        head.appendChild(vttBtn);
+      }
     }
     if (h.conversationId) {
       const sumLabel = kind === 'onenote' ? 'ページ全体を要約'

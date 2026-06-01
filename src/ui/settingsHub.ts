@@ -1236,7 +1236,7 @@ function buildPaSetupPane(pane: HTMLElement, draft: RuntimeSettings, _root: HTML
 // Spira の「Spira について」と同じ作法で、アーキテクチャ概要と主要 ADR を提示。
 
 function buildAboutPane(pane: HTMLElement, _root: HTMLElement): void {
-  paneHead(pane, 'Tadori について', 'Tadori (辿り) はメール + OneNote を意味検索 + RAG で辿るブックマークレット型ツールです。');
+  paneHead(pane, 'Tadori について', 'Tadori (辿り) はメール / OneNote / PPTX / Teams 会議録を意味検索 + RAG で辿るブックマークレット型ツールです。');
 
   const buildId = (window as unknown as { __TADORI_BUILD_ID__?: string }).__TADORI_BUILD_ID__ || '(不明)';
 
@@ -1249,7 +1249,17 @@ function buildAboutPane(pane: HTMLElement, _root: HTMLElement): void {
 
   pane.appendChild(section('概要',
     el('p', { class: 'tdr-hint' }, [
-      'メーリングリスト等の過去メールと OneNote ページをまとめて意味検索 (ベクトル類似度 + キーワード一致) し、AI が出典付きで回答するツール。回答内容は OneNote の任意ページに「Tadori 追記」として書き戻せます。委任先 M365 制約下で動作 (独立サーバ不要)。',
+      'メーリングリスト等の過去メール / OneNote ページ / PowerPoint マニュアル / Teams 会議の文字起こしをまとめて意味検索 (ベクトル類似度 + キーワード一致) し、AI が出典付きで回答するツール。回答内容は OneNote の任意ページに「Tadori 追記」として書き戻せます。委任先 M365 制約下で動作 (独立サーバ不要)。',
+    ]),
+  ));
+
+  pane.appendChild(section('検索対象ソース (kind)',
+    el('ul', { class: 'tdr-hint', style: 'margin:0;padding-left:var(--s-5)' }, [
+      el('li', {}, ['メール — Outlook / Power Automate 経由で取り込み']),
+      el('li', {}, ['OneNote — relay (COM) でページ抽出']),
+      el('li', {}, ['PPTX — SP フォルダの .pptx を relay + Vision LLM で markdown 化']),
+      el('li', {}, ['会議 (Teams) — SP フォルダの .vtt を話者・時刻付きで取り込み (relay/Vision 不要)']),
+      el('li', { style: 'margin-top:var(--s-2);color:var(--ink-4)' }, ['※ チャット入力欄上の「検索対象」チップで種別ごとに ON/OFF 可能']),
     ]),
   ));
 
