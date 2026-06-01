@@ -21,6 +21,8 @@ import { renderMarkdown } from '../lib/markdown';
 import { openMailInOutlook } from '../outlook/import';
 import { openOneNotePage, appendOneNotePage, markdownToBlocks, fetchCurrentOneNotePageId, fetchOneNoteLinks, fetchOneNoteHierarchy, fetchTadoriOutlines, replaceTadoriOutline, type TadoriOutline } from '../onenote/import';
 import { openPptxAtSlide } from '../sync/pptxIngest';
+import { openTranscriptSource } from '../sync/transcriptIngest';
+import { secToMmSs as secToClock } from '../transcript/vtt';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1027,15 +1029,19 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     hitEl.dataset.n = String(n); // [n] クリックでの引き当て用
     const badgeIcon = kind === 'onenote' ? icons.notebook(12)
       : kind === 'pptx' ? icons.presentation(12)
+      : kind === 'transcript' ? icons.mic(12)
       : kind === 'doc' ? icons.folder(12)
       : icons.message(12);
     const badgeLabel = kind === 'onenote' ? 'OneNote'
       : kind === 'pptx' ? 'PPTX'
+      : kind === 'transcript' ? 'Teams'
       : kind === 'doc' ? '文書'
       : 'メール';
-    // pptx は「ファイル名 — スライド N: タイトル」の形に組み替えて視認性向上。
+    // pptx は「ファイル名 — スライド N: タイトル」、transcript は「会議名 — 時刻」に組み替え。
     const subjectText = kind === 'pptx' && h.pptxFile
       ? `${h.pptxFile} — スライド ${h.slideNo}: ${h.slideTitle || h.subject}`
+      : kind === 'transcript'
+      ? `${h.subject}${typeof h.startSec === 'number' ? ` — ${secToClock(h.startSec)}` : ''}`
       : h.subject;
     const head = el('div', { class: 'tdr-hit-head' }, [
       el('span', { class: 'tdr-hit-num' }, [String(n)]),
@@ -1101,19 +1107,41 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         }
       });
       head.appendChild(openBtn);
+    } else if (kind === 'transcript' && (h.recordingServerRelUrl || h.vttServerRelUrl)) {
+      // Teams 会議録: 録画があれば該当時刻から再生、無ければ .vtt をブラウザ表示。
+      const openBtn = el('button', {
+        class: 'tdr-hit-open',
+        'aria-label': h.recordingServerRelUrl ? '録画を該当時刻から開く' : '文字起こしを開く',
+        title: h.recordingServerRelUrl ? '録画を該当時刻から開く' : '文字起こし (.vtt) を開く',
+        html: icons.external(14),
+      });
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openTranscriptSource({
+          recordingServerRelUrl: h.recordingServerRelUrl,
+          vttServerRelUrl: h.vttServerRelUrl,
+          startSec: h.startSec,
+        });
+      });
+      head.appendChild(openBtn);
     }
     if (h.conversationId) {
+      const sumLabel = kind === 'onenote' ? 'ページ全体を要約'
+        : kind === 'transcript' ? '会議全体を要約'
+        : kind === 'pptx' ? '資料全体を要約'
+        : '経緯を要約';
+      const sumTitle = kind === 'onenote' ? '同じページのチャンクをまとめて要約'
+        : kind === 'transcript' ? '同じ会議のチャンクをまとめて時系列で要約'
+        : kind === 'pptx' ? '同じ資料の全スライドをまとめて要約'
+        : '同じスレッドのやり取りを時系列で要約';
       const sumBtn = el('button', {
-        class: 'tdr-hit-open',
-        'aria-label': kind === 'onenote' ? 'ページ全体を要約' : '経緯を要約',
-        title: kind === 'onenote' ? '同じページのチャンクをまとめて要約' : '同じスレッドのやり取りを時系列で要約',
-        html: icons.list(14),
+        class: 'tdr-hit-open', 'aria-label': sumLabel, title: sumTitle, html: icons.list(14),
       });
       sumBtn.addEventListener('click', (e) => { e.stopPropagation(); void summarizeThread(h); });
       head.appendChild(sumBtn);
     }
     hitEl.appendChild(head);
-    const meta = kind === 'onenote'
+    const meta = (kind === 'onenote' || kind === 'transcript')
       ? `${h.from}  ${h.date.slice(0, 10)}${typeof h.chunkIdx === 'number' && h.chunkCount && h.chunkCount > 1 ? `  ・ チャンク #${h.chunkIdx + 1}/${h.chunkCount}` : ''}`
       : `${h.from}  ${h.date.slice(0, 10)}`;
     hitEl.appendChild(el('div', { class: 'tdr-hit-from' }, [meta]));
@@ -1134,6 +1162,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
           detail.appendChild(wrap);
         } else if (kind === 'onenote') {
           detail.appendChild(renderOneNoteHeader(h));
+          const wrap = el('div', { class: 'tdr-hit-detail-body' });
+          renderMailBody(wrap, h.body, false);
+          detail.appendChild(wrap);
+        } else if (kind === 'transcript') {
+          detail.appendChild(renderTranscriptHeader(h));
           const wrap = el('div', { class: 'tdr-hit-detail-body' });
           renderMailBody(wrap, h.body, false);
           detail.appendChild(wrap);
@@ -1185,6 +1218,29 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       head.appendChild(img);
     }
     return head;
+  }
+
+  /** Teams 会議録用ヘッダ。会議名 + 日時 + ファイル + チャンク先頭時刻。 */
+  function renderTranscriptHeader(h: SavedHit): HTMLElement {
+    const meta = el('div', { class: 'tdr-hit-detail-meta' }, [
+      el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['会議: ']),
+        el('span', {}, [h.subject || '(会議)']),
+      ]),
+      el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['ファイル: ']),
+        el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [h.transcriptFile || '(不明)']),
+      ]),
+      h.date ? el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['日時: ']),
+        el('span', {}, [h.date.slice(0, 16).replace('T', ' ')]),
+      ]) : null,
+      typeof h.startSec === 'number' ? el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['この区間: ']),
+        el('span', {}, [`${secToClock(h.startSec)} 〜`]),
+      ]) : null,
+    ].filter(Boolean) as HTMLElement[]);
+    return el('div', { class: 'tdr-hit-detail-head' }, [meta]);
   }
 
   /** 画像をオーバーレイで拡大表示 (ライトボックス)。背景クリック / Esc / ✕ で閉じる。 */

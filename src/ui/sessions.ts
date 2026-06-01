@@ -5,7 +5,7 @@ export interface SavedHit {
   messageId: string;
   internetMessageId: string;
   conversationId: string;
-  kind: 'mail' | 'onenote' | 'doc' | 'pptx';
+  kind: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -23,6 +23,11 @@ export interface SavedHit {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
+  /** Teams 文字起こしメタ (kind='transcript' のときのみ意味を持つ)。 */
+  transcriptFile?: string;
+  vttServerRelUrl?: string;
+  recordingServerRelUrl?: string;
+  startSec?: number;
 }
 
 export interface SavedTurn {

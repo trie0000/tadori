@@ -33,7 +33,7 @@ export interface MailRecord {
   messageId: string;
   internetMessageId: string;
   conversationId: string;
-  kind: 'mail' | 'onenote' | 'doc' | 'pptx';
+  kind: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -51,7 +51,12 @@ export interface MailRecord {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
-  /** ソース内容ハッシュ (差分 Vision 判定用)。 */
+  /** Teams 文字起こしのメタ (kind='transcript' のときのみ意味を持つ)。 */
+  transcriptFile?: string;
+  vttServerRelUrl?: string;
+  recordingServerRelUrl?: string;
+  startSec?: number;
+  /** ソース内容ハッシュ (差分判定用)。 */
   srcHash?: string;
 }
 
@@ -117,6 +122,10 @@ export class VectorDb {
         slideNo: r.slideNo,
         slideTitle: r.slideTitle,
         thumbServerRelUrl: r.thumbServerRelUrl,
+        transcriptFile: r.transcriptFile,
+        vttServerRelUrl: r.vttServerRelUrl,
+        recordingServerRelUrl: r.recordingServerRelUrl,
+        startSec: r.startSec,
         srcHash: r.srcHash,
       });
     }

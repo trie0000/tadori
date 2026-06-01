@@ -24,4 +24,6 @@ export const icons = {
   folder: (s?: number) => wrap('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', s),
   // 横長スクリーン + 中央に再生三角 = プレゼン/スライドを連想 (Feather "monitor" + "play" の合成風)
   presentation: (s?: number) => wrap('<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M10 8l4 2-4 2z"/>', s),
+  // マイク = 会議/文字起こし (Feather "mic")
+  mic: (s?: number) => wrap('<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v4M8 23h8"/>', s),
 };

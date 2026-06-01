@@ -28,6 +28,11 @@ import {
   type PptxFolderConfig,
 } from '../sync/pptxFolders';
 import { syncPptxFolder, type PptxIngestProgress } from '../sync/pptxIngest';
+import {
+  listTranscriptFolders, addTranscriptFolder, removeTranscriptFolder,
+  deriveLabel as deriveTranscriptLabel, type TranscriptFolderConfig,
+} from '../sync/transcriptFolders';
+import { syncTranscriptFolder, type TranscriptIngestProgress } from '../sync/transcriptIngest';
 import { getEngine, wipeImportedMails } from '../db/engine';
 import { getFontSize, setFontSize } from '../utils/fontSize';
 import {
@@ -361,6 +366,7 @@ function buildIngestPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
   buildOutlookImport(pane, draft, root, siteUrl);
   buildOneNoteImport(pane, draft, root, siteUrl);
   buildPptxImport(pane, draft, root, siteUrl);
+  buildTranscriptImport(pane, draft, root, siteUrl);
 }
 
 /** "YYYY-MM-DD" の since〜until 期間を月単位の半開区間に分割。
@@ -993,6 +999,141 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
   }
 
   syncAllBtn.addEventListener('click', () => { void runSync(listPptxFolders(siteUrl)); });
+  stopBtn.addEventListener('click', () => { ac?.abort(); });
+
+  pane.append(addRow, listEl, el('div', { style: 'display:flex;gap:var(--s-3);align-items:center;margin-top:var(--s-3)' }, [syncAllBtn, stopBtn]), bar, status);
+  renderList();
+}
+
+/** Teams 会議文字起こし (.vtt) 取り込み。SP の会議録置き場フォルダを指定して同期。
+ *  設計参照: docs/teams-transcript-design.md */
+function buildTranscriptImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement, siteUrl: string): void {
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['Teams 会議録 取り込み']));
+  pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-4)' }, [
+    'Teams 会議の文字起こし (.vtt) を SharePoint のフォルダから取り込みます。',
+    '運用: SP に「会議録置き場」フォルダを 1 つ作り、対象の .vtt を手動アップロード → このフォルダを登録して同期。',
+    '発言は話者・時刻付きでチャンク化してそのまま埋め込みます (LLM 要約なし)。Vision/relay 不要、ブラウザ完結。',
+    '※ .vtt 内に会議名・日時は無いため、ファイル名から推定します。',
+  ]));
+
+  const urlInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'https://contoso.sharepoint.com/sites/foo/Shared Documents/会議録' }) as HTMLInputElement;
+  urlInput.style.flex = '1';
+  const labelInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'ラベル (任意)' }) as HTMLInputElement;
+  labelInput.style.width = '160px';
+  const recursiveCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const recursiveLabel = el('label', { style: 'display:flex;align-items:center;gap:var(--s-2);font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap' }, [recursiveCb, '再帰']);
+  const addBtn = el('button', { class: 'tdr-btn' }, ['追加']);
+  const addRow = el('div', { style: 'display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-2)' }, [urlInput, labelInput, recursiveLabel, addBtn]);
+
+  const listEl = el('div', { style: 'margin-top:var(--s-4);display:flex;flex-direction:column;gap:var(--s-3)' });
+  const syncAllBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, [el('span', { html: icons.mic(14) }), 'すべて同期']);
+  const stopBtn = el('button', { class: 'tdr-btn', style: 'display:none' }, ['停止']);
+  const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);margin-top:var(--s-3)' }, ['']);
+  const barFill = el('div', { class: 'tdr-progress-fill' });
+  const bar = el('div', { class: 'tdr-progress', style: 'display:none' }, [barFill]);
+  const showBar = (pct: number): void => { bar.style.display = ''; barFill.style.width = `${pct}%`; };
+  const hideBar = (): void => { bar.style.display = 'none'; barFill.style.width = '0%'; };
+
+  let ac: AbortController | null = null;
+
+  function renderList(): void {
+    listEl.replaceChildren();
+    const folders = listTranscriptFolders(siteUrl);
+    if (folders.length === 0) {
+      listEl.appendChild(el('div', { class: 'tdr-hint' }, ['まだ取り込みフォルダが登録されていません。']));
+      syncAllBtn.disabled = true;
+      return;
+    }
+    syncAllBtn.disabled = false;
+    for (const f of folders) {
+      const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
+      const fileCount = Object.keys(f.perFile).length;
+      const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600' }, [
+        el('span', { html: icons.mic(14), style: 'display:inline-flex;color:var(--ink-3)' }),
+        el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [f.label || deriveTranscriptLabel(f.url)]),
+      ]);
+      const meta = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-1);font-size:var(--fs-xs)' }, [
+        `URL: ${f.url}`, el('br'),
+        `最終同期: ${lastSync}　/　会議 (.vtt): ${fileCount} 件　/　${f.recursive ? '再帰あり' : '直下のみ'}`,
+      ]);
+      const syncBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['同期']);
+      const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
+      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, delBtn]);
+      const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [head, meta, actions]);
+      syncBtn.addEventListener('click', () => { void runSync([f]); });
+      delBtn.addEventListener('click', () => {
+        confirmModal({
+          root, title: '会議録フォルダ設定を削除',
+          message: `「${f.label || f.url}」の設定を削除します。\n(取り込み済みのチャンクはベクトル DB に残ります)`,
+          primaryLabel: '削除', primaryVariant: 'danger',
+          onConfirm: () => { removeTranscriptFolder(siteUrl, f.url); renderList(); toast(root, 'フォルダ設定を削除しました', 'ok'); },
+        });
+      });
+      listEl.appendChild(card);
+    }
+  }
+
+  addBtn.addEventListener('click', () => {
+    const url = urlInput.value.trim();
+    if (!url) { toast(root, 'フォルダ URL を入力してください', 'warn'); return; }
+    if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) {
+      toast(root, 'URL は https://... か /sites/... の形式で入力してください', 'warn'); return;
+    }
+    addTranscriptFolder(siteUrl, { url, label: labelInput.value.trim() || undefined, recursive: recursiveCb.checked });
+    urlInput.value = ''; labelInput.value = '';
+    renderList();
+    toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
+  });
+
+  async function runSync(folders: TranscriptFolderConfig[]): Promise<void> {
+    if (ac) return;
+    ac = new AbortController();
+    syncAllBtn.style.display = 'none'; stopBtn.style.display = '';
+    showBar(0);
+    let totalChunks = 0, totalSkipped = 0, totalDeleted = 0, totalFailed = 0;
+    try {
+      for (let i = 0; i < folders.length; i++) {
+        if (ac.signal.aborted) break;
+        const f = folders[i];
+        status.textContent = `[${i + 1}/${folders.length}] ${f.label || deriveTranscriptLabel(f.url)} を同期中…`;
+        const r = await syncTranscriptFolder(
+          f, draft, siteUrl,
+          (p: TranscriptIngestProgress) => {
+            const fileLabel = p.file ? `${p.file} (${p.fileIdx}/${p.fileTotal})` : '一覧取得中';
+            status.textContent = `${fileLabel} — ${p.message ?? p.phase}`;
+            if (p.fileTotal > 0) {
+              const pct = Math.round((p.fileIdx - 1 + (p.chunkTotal > 0 ? p.chunkIdx / p.chunkTotal : 0)) / p.fileTotal * 100);
+              showBar(Math.min(99, Math.max(0, pct)));
+            }
+          },
+          ac.signal,
+        );
+        totalChunks += r.ingestedChunks;
+        totalSkipped += r.skippedFiles;
+        totalDeleted += r.deletedFiles;
+        totalFailed += r.failedFiles;
+      }
+      showBar(100);
+      const msg = `完了: ${totalChunks} チャンク取込 / スキップ ${totalSkipped} 件 / 削除 ${totalDeleted} 件${totalFailed ? ` / 失敗 ${totalFailed} 件` : ''}`;
+      status.textContent = msg;
+      toast(root, msg, totalFailed ? 'warn' : 'ok');
+      renderList();
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') {
+        status.textContent = '停止しました (取り込み済みは保存済み)';
+        toast(root, '取り込みを停止しました', 'warn');
+      } else {
+        status.textContent = `失敗: ${(e as Error).message}`;
+        toast(root, `取り込み失敗: ${(e as Error).message}`, 'error');
+      }
+    } finally {
+      ac = null;
+      syncAllBtn.style.display = ''; stopBtn.style.display = 'none';
+      setTimeout(hideBar, 1500);
+    }
+  }
+
+  syncAllBtn.addEventListener('click', () => { void runSync(listTranscriptFolders(siteUrl)); });
   stopBtn.addEventListener('click', () => { ac?.abort(); });
 
   pane.append(addRow, listEl, el('div', { style: 'display:flex;gap:var(--s-3);align-items:center;margin-top:var(--s-3)' }, [syncAllBtn, stopBtn]), bar, status);

@@ -11,7 +11,7 @@ export interface MailHit {
   messageId: string;
   internetMessageId: string;
   conversationId: string;
-  kind: 'mail' | 'onenote' | 'doc' | 'pptx';
+  kind: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -29,6 +29,11 @@ export interface MailHit {
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
+  /** Teams 文字起こしのメタ (kind='transcript' のときのみ意味を持つ)。 */
+  transcriptFile?: string;
+  vttServerRelUrl?: string;
+  recordingServerRelUrl?: string;
+  startSec?: number;
 }
 
 function toHit(record: MailRecord, score: number): MailHit {
@@ -53,6 +58,10 @@ function toHit(record: MailRecord, score: number): MailHit {
     slideNo: record.slideNo,
     slideTitle: record.slideTitle,
     thumbServerRelUrl: record.thumbServerRelUrl,
+    transcriptFile: record.transcriptFile,
+    vttServerRelUrl: record.vttServerRelUrl,
+    recordingServerRelUrl: record.recordingServerRelUrl,
+    startSec: record.startSec,
   };
 }
 
@@ -71,7 +80,7 @@ export interface SearchOptions {
   /** 検索対象とする kind を絞る (例: ['mail', 'onenote'] のみ)。
    *  undefined または空配列なら絞らない (全 kind を対象)。
    *  ユーザがチャットボックス近くの「+ ソース選択」UI で設定する。 */
-  kinds?: Array<'mail' | 'onenote' | 'doc' | 'pptx'>;
+  kinds?: Array<'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript'>;
 }
 
 export async function searchVectors(

@@ -26,14 +26,19 @@ export interface IngestMail {
   /** スレッド識別子 (Outlook ConversationID) または OneNote ページID 等の親ドキュメントID。 */
   conversationId?: string;
   /** ソース種別。省略時は 'mail'。 */
-  kind?: 'mail' | 'onenote' | 'doc' | 'pptx';
+  kind?: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
   /** PPTX 関連メタ (kind='pptx' のときのみ意味を持つ)。検索結果カード/ジャンプで使用。 */
   pptxFile?: string;
   pptxServerRelUrl?: string;
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
-  /** ソース内容ハッシュ (差分 Vision 判定用)。 */
+  /** Teams 文字起こしメタ (kind='transcript' のときのみ意味を持つ)。 */
+  transcriptFile?: string;
+  vttServerRelUrl?: string;
+  recordingServerRelUrl?: string;
+  startSec?: number;
+  /** ソース内容ハッシュ (差分判定用)。 */
   srcHash?: string;
   chunkIdx?: number;
   chunkCount?: number;
@@ -169,6 +174,10 @@ export async function ingestToSegments(
       slideNo: m.slideNo,
       slideTitle: m.slideTitle,
       thumbServerRelUrl: m.thumbServerRelUrl,
+      transcriptFile: m.transcriptFile,
+      vttServerRelUrl: m.vttServerRelUrl,
+      recordingServerRelUrl: m.recordingServerRelUrl,
+      startSec: m.startSec,
       srcHash: m.srcHash,
       emb: encodeEmbedding(normalize(vecs[i])),
     }));

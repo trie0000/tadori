@@ -19,17 +19,22 @@ export interface SegmentRecord {
   internetMessageId?: string;
   /** スレッド識別子 (Outlook ConversationID)。OneNote では parentDocId (pageId) を兼用。 */
   conversationId?: string;
-  /** ソース種別。'mail' (既定) / 'onenote' / 'doc' / 'pptx'。 */
-  kind?: 'mail' | 'onenote' | 'doc' | 'pptx';
+  /** ソース種別。'mail' (既定) / 'onenote' / 'doc' / 'pptx' / 'transcript'。 */
+  kind?: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
   /** PPTX 取り込みのメタ (kind='pptx' のときだけ意味を持つ)。 */
   pptxFile?: string;
   pptxServerRelUrl?: string;
   slideNo?: number;
   slideTitle?: string;
   thumbServerRelUrl?: string;
-  /** ソース内容のハッシュ (pptx: title+rawText+tables+notes)。
-   *  再取り込み時に「内容が変わっていないスライドは Vision/embed をスキップ」
-   *  する差分判定に使う。 */
+  /** Teams 文字起こしのメタ (kind='transcript' のときだけ意味を持つ)。 */
+  transcriptFile?: string;
+  vttServerRelUrl?: string;
+  recordingServerRelUrl?: string;
+  startSec?: number;
+  /** ソース内容のハッシュ (pptx: title+rawText+tables+notes / transcript: 本文)。
+   *  再取り込み時に「内容が変わっていないチャンクは embed をスキップ」する
+   *  差分判定に使う。 */
   srcHash?: string;
   /** 親ドキュメント内のチャンク番号 (0 始まり)。単一レコードならどちらも省略。 */
   chunkIdx?: number;
