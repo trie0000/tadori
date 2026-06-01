@@ -837,7 +837,12 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
         class: 'tdr-btn', style: 'font-size:var(--fs-sm)',
         title: '更新時刻に関係なく全 pptx を再解析 (Vision モデル変更時など)',
       }, ['強制再取り込み']);
+      const thumbBtn = el('button', {
+        class: 'tdr-btn', style: 'font-size:var(--fs-sm)',
+        title: 'サムネ PNG だけ作り直す (Vision なし=無料。誤って消したサムネの復旧用)',
+      }, ['サムネ再生成']);
       const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
+      thumbBtn.addEventListener('click', () => { void runSync([f], { thumbsOnly: true }); });
       // ファイル一覧を折り畳み表示 (perFile = 取込済みファイル一覧から構築)
       const fileNames = Object.keys(f.perFile).sort();
       const filesBody = el('div', { class: 'tdr-pptx-files', style: 'display:none;margin-top:var(--s-2);border-top:1px solid var(--line);padding-top:var(--s-2)' });
@@ -883,7 +888,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
           filesBody.appendChild(row);
         }
       }
-      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2);align-items:center' }, [syncBtn, forceBtn, filesToggle, delBtn]);
+      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2);align-items:center;flex-wrap:wrap' }, [syncBtn, forceBtn, thumbBtn, filesToggle, delBtn]);
       const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [head, meta, actions, filesBody]);
 
       syncBtn.addEventListener('click', () => { void runSync([f]); });
@@ -929,7 +934,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
     toast(root, 'フォルダを追加しました。「同期」ボタンで取り込みを開始してください', 'ok');
   });
 
-  async function runSync(folders: PptxFolderConfig[], runOpts: { force?: boolean; targetFiles?: ReadonlySet<string> } = {}): Promise<void> {
+  async function runSync(folders: PptxFolderConfig[], runOpts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean } = {}): Promise<void> {
     if (ac) return;
     ac = new AbortController();
     syncAllBtn.style.display = 'none'; stopBtn.style.display = '';
@@ -939,7 +944,9 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
       for (let i = 0; i < folders.length; i++) {
         if (ac.signal.aborted) break;
         const f = folders[i];
-        const tag = runOpts.targetFiles
+        const tag = runOpts.thumbsOnly
+          ? '【サムネ再生成】 '
+          : runOpts.targetFiles
           ? `【個別再取込: ${[...runOpts.targetFiles].slice(0, 2).join(',')}${runOpts.targetFiles.size > 2 ? '…' : ''}】 `
           : runOpts.force ? '【強制再取り込み】 ' : '';
         status.textContent = `${tag}[${i + 1}/${folders.length}] ${f.label || deriveLabel(f.url)} を同期中…`;
@@ -956,7 +963,7 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
             }
           },
           ac.signal,
-          { force: runOpts.force, targetFiles: runOpts.targetFiles },
+          { force: runOpts.force, targetFiles: runOpts.targetFiles, thumbsOnly: runOpts.thumbsOnly },
         );
         totalIngested += r.ingestedSlides;
         totalSkippedSlides += r.skippedSlides;
@@ -964,7 +971,9 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
         totalFailed += r.failedSlides;
       }
       showBar(100);
-      const msg = `完了: Vision 実行 ${totalIngested} スライド / 変更なしスキップ ${totalSkippedSlides} / 削除 ${totalDeletedSlides}${totalFailed ? ` / 失敗 ${totalFailed}` : ''} スライド`;
+      const msg = runOpts.thumbsOnly
+        ? `サムネ再生成 完了: ${totalIngested} 枚${totalFailed ? ` / 失敗 ${totalFailed}` : ''}`
+        : `完了: Vision 実行 ${totalIngested} スライド / 変更なしスキップ ${totalSkippedSlides} / 削除 ${totalDeletedSlides}${totalFailed ? ` / 失敗 ${totalFailed}` : ''} スライド`;
       status.textContent = msg;
       toast(root, msg, totalFailed ? 'warn' : 'ok');
       renderList(); // perFile が更新されているので再描画

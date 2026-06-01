@@ -206,6 +206,14 @@
 .tdr-source-menu-item .ic{display:inline-flex;color:var(--ink-4,#777);}
 #tadori-root .tdr-disclaimer{max-width:var(--thread-w);margin:var(--s-2) auto 0;font-size:var(--fs-xs);color:var(--ink-4);line-height:1.4;text-align:center;opacity:.85;}
 
+/* サムネ拡大ライトボックス */
+#tadori-root .tdr-lightbox{position:fixed;inset:0;z-index:2147483600;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;padding:32px;cursor:zoom-out;}
+#tadori-root .tdr-lightbox-frame{max-width:95vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:default;}
+#tadori-root .tdr-lightbox-img{max-width:95vw;max-height:84vh;object-fit:contain;border-radius:var(--r-1);box-shadow:0 8px 40px rgba(0,0,0,0.5);background:#fff;}
+#tadori-root .tdr-lightbox-cap{color:#fff;font-size:var(--fs-sm);text-align:center;opacity:.9;}
+#tadori-root .tdr-lightbox-close{position:fixed;top:16px;right:20px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,0.15);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
+#tadori-root .tdr-lightbox-close:hover{background:rgba(255,255,255,0.3);}
+
 #tadori-root .tdr-pill{display:inline-flex;align-items:center;gap:var(--s-2);height:26px;padding:0 10px;font-size:var(--fs-sm);border-radius:99px;border:1px solid var(--line-strong);background:var(--paper-2);color:var(--ink-3);}
 #tadori-root .tdr-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);}
 #tadori-root .tdr-pill.is-off .dot{background:var(--ink-4);}

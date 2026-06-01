@@ -1166,7 +1166,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
 
     const head = el('div', { class: 'tdr-hit-detail-head' }, [meta]);
 
-    // サムネ (SP に上がっていればロード)。失敗は静かに無視。
+    // サムネ (SP に上がっていればロード)。失敗は静かに無視。クリックで拡大表示。
     if (h.thumbServerRelUrl) {
       const thumbUrl = h.thumbServerRelUrl.startsWith('http')
         ? h.thumbServerRelUrl
@@ -1174,12 +1174,39 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       const img = el('img', {
         src: thumbUrl,
         alt: `スライド ${h.slideNo} のサムネイル`,
-        style: 'max-width:320px;max-height:240px;border:1px solid var(--line);border-radius:var(--r-1);margin-top:var(--s-2);display:block',
+        title: 'クリックで拡大',
+        style: 'max-width:320px;max-height:240px;border:1px solid var(--line);border-radius:var(--r-1);margin-top:var(--s-2);display:block;cursor:zoom-in',
       }) as HTMLImageElement;
       img.addEventListener('error', () => { img.style.display = 'none'; });
+      img.addEventListener('click', (e) => {
+        e.stopPropagation(); // 親カードの開閉トグルを誘発しない
+        openImageLightbox(thumbUrl, `${h.pptxFile || ''} スライド ${h.slideNo}`);
+      });
       head.appendChild(img);
     }
     return head;
+  }
+
+  /** 画像をオーバーレイで拡大表示 (ライトボックス)。背景クリック / Esc / ✕ で閉じる。 */
+  function openImageLightbox(src: string, caption: string): void {
+    const backdrop = el('div', { class: 'tdr-lightbox' });
+    const closeBtn = el('button', { class: 'tdr-lightbox-close', 'aria-label': '閉じる', html: icons.close(20) });
+    const bigImg = el('img', { src, alt: caption, class: 'tdr-lightbox-img' }) as HTMLImageElement;
+    const cap = el('div', { class: 'tdr-lightbox-cap' }, [caption]);
+    const frame = el('div', { class: 'tdr-lightbox-frame' }, [bigImg, cap]);
+    backdrop.append(closeBtn, frame);
+
+    const close = (): void => {
+      backdrop.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    // frame 内クリックは閉じない (画像操作を邪魔しない)
+    frame.addEventListener('click', (e) => e.stopPropagation());
+    root.appendChild(backdrop);
   }
 
   /** OneNote ページ用ヘッダ (件名/最終更新/ノートブック › セクション/チャンク)。 */

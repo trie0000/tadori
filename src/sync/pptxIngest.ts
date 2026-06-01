@@ -281,7 +281,7 @@ export async function syncPptxFolder(
   fallbackSiteUrl: string,
   onProgress?: (p: PptxIngestProgress) => void,
   signal?: AbortSignal,
-  opts: { force?: boolean; targetFiles?: ReadonlySet<string> } = {},
+  opts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean } = {},
 ): Promise<PptxIngestResult> {
   const { siteUrl, folderServerRel } = resolveSpFolder(folder.url, fallbackSiteUrl);
   const sp = new SharePointClient(siteUrl);
@@ -307,11 +307,14 @@ export async function syncPptxFolder(
     });
   }
 
-  // 2. 増分判定 & 削除検知 (force=true で全ファイル再取り込み、targetFiles で個別指定)
-  const { toIngest, skipped, deleted } = pickTargets(
-    pptxFiles, folder.perFile, opts.force === true, opts.targetFiles,
-  );
-  if (opts.targetFiles) console.log(`[tadori] pptx sync: 個別ファイル再取込モード — 対象 ${opts.targetFiles.size} ファイル`);
+  // 2. 増分判定 & 削除検知
+  //   thumbsOnly: サムネ再生成のみ。全ファイル対象 + 削除検知なし + Vision/embed しない。
+  //   force=true: lastModified 無視で全 pptx を再解析。targetFiles: 個別指定。
+  const { toIngest, skipped, deleted } = opts.thumbsOnly
+    ? pickTargets(pptxFiles, folder.perFile, true, opts.targetFiles)  // 全件 or 指定件を回す (削除検知は targetFiles 同様スキップさせるため下で deleted を無視)
+    : pickTargets(pptxFiles, folder.perFile, opts.force === true, opts.targetFiles);
+  if (opts.thumbsOnly) console.log('[tadori] pptx sync: サムネ再生成モード (Vision なし)');
+  else if (opts.targetFiles) console.log(`[tadori] pptx sync: 個別ファイル再取込モード — 対象 ${opts.targetFiles.size} ファイル`);
   else if (opts.force) console.log('[tadori] pptx sync: 強制再取り込みモード — 全 pptx を再解析');
 
   // サムネは Tadori 管理フォルダ配下 (<site>/Shared Documents/Tadori/pptx-thumbs) に集約。
@@ -319,9 +322,9 @@ export async function syncPptxFolder(
   //   セグメント (manifest/seg-*.json) と同じ Tadori フォルダ配下にまとめる。
   const thumbFolderServerRel = (await getEngine(siteUrl)).store.pptxThumbFolder;
 
-  // 3. 削除されたファイルの chunk を消す
+  // 3. 削除されたファイルの chunk を消す (サムネ再生成モードでは検索データを触らない)
   let deletedFiles = 0;
-  if (deleted.length > 0) {
+  if (!opts.thumbsOnly && deleted.length > 0) {
     const eng = await getEngine(siteUrl);
     for (const fname of deleted) {
       if (signal?.aborted) break;
@@ -350,8 +353,9 @@ export async function syncPptxFolder(
   //   - 個別再取込 (targetFiles 有り): target 外のファイルは **旧 perFile の値を保持**
   //     (実際に再処理していないのに「処理済み」と誤認しないため)
   const newPerFile: Record<string, string> = {};
-  if (opts.targetFiles) {
-    // 既存値をベースに、target に含まれるファイルだけ後で上書きする
+  if (opts.targetFiles || opts.thumbsOnly) {
+    // 個別再取込 / サムネ再生成: 既存 perFile を全部保持 (取込状態は変えない)。
+    // ※ thumbsOnly は下のループでも newPerFile を書き換えない (サムネは内容変更ではない)。
     for (const [name, ts] of Object.entries(folder.perFile)) newPerFile[name] = ts;
   } else {
     // 通常同期: skipped (= 今回触らないが SP には居る) は SP の現在値で更新
@@ -376,6 +380,40 @@ export async function syncPptxFolder(
       // relay extract
       onProgress?.({ file: f.name, fileIdx, fileTotal, slideIdx: 0, slideTotal: 0, phase: 'extract', message: `${f.name} を PowerPoint で解析中…` });
       const slides = await callPptxExtract(s.relayBaseUrl, bytes, f.name, signal);
+
+      // ── サムネ再生成モード: Vision も embed も検索 DB も一切触らず、PNG だけ
+      //    Tadori/pptx-thumbs に再アップロードする。誤って消したサムネの復旧用。
+      if (opts.thumbsOnly) {
+        let regenerated = 0;
+        for (let j = 0; j < slides.length; j++) {
+          if (signal?.aborted) break;
+          const slide = slides[j];
+          onProgress?.({
+            file: f.name, fileIdx, fileTotal,
+            slideIdx: j + 1, slideTotal: slides.length,
+            phase: 'embed',
+            message: `${f.name} サムネ再生成 ${j + 1}/${slides.length}…`,
+          });
+          try {
+            const pngBytes = Uint8Array.from(atob(slide.pngBase64), c => c.charCodeAt(0)).buffer;
+            await uploadThumb(sp, thumbFolderServerRel, f, slide.slideNo, pngBytes);
+            regenerated++;
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') throw e;
+            console.warn('[pptx] thumb regen failed:', f.name, slide.slideNo, (e as Error).message);
+            failedSlides++;
+          }
+        }
+        if (regenerated > 0) ingestedFiles++;
+        ingestedSlides += regenerated;
+        onProgress?.({
+          file: f.name, fileIdx, fileTotal,
+          slideIdx: slides.length, slideTotal: slides.length,
+          phase: 'done',
+          message: `${f.name} サムネ再生成 完了 (${regenerated}/${slides.length})`,
+        });
+        continue; // Vision/embed/削除検知は完全スキップ
+      }
 
       // 差分判定用に既存レコードを引く (messageId → srcHash)。
       // force=true (強制 / 個別再取込) のときは差分スキップせず全スライド Vision。
