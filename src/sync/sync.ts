@@ -14,6 +14,11 @@ export interface SyncResult {
 }
 
 export class VectorSync {
+  /** 直近の sync 統計 (診断用)。manifest が示すセグメント数 / DL 数 / DB 件数。 */
+  lastStats: { manifestSealed: number; cached: number; downloaded: number; dbSize: number } = {
+    manifestSealed: -1, cached: 0, downloaded: 0, dbSize: 0,
+  };
+
   constructor(
     private readonly store: SpVectorStore,
     private readonly cache: SegmentCache,
@@ -62,6 +67,10 @@ export class VectorSync {
     await this.pruneOrphans(manifest);
     await this.cache.setManifest(manifest);
 
+    this.lastStats = {
+      manifestSealed: manifest.sealed.length + (manifest.open ? 1 : 0),
+      cached: cachedIds.length, downloaded: dl, dbSize: this.db.size,
+    };
     return { loadedFromCache: cachedIds.length, downloaded: dl, total: this.db.size };
   }
 

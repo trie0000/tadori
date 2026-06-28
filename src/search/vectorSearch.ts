@@ -125,6 +125,7 @@ export async function searchVectors(
   const kc = eng.db.kindCounts();
   const dimk = eng.db.dimByKind();
   relayLog(s, `検索開始 q="${vecQ.slice(0, 40)}" queryDim=${qvec.length} ` +
+    `manifest_seg数=${eng.sync.lastStats.manifestSealed} DL数=${eng.sync.lastStats.downloaded} ` +
     `DB件数=${eng.db.size} 種別=${JSON.stringify(kc)} ` +
     `kindFilter=${JSON.stringify(opts.kinds ?? '全部')} ` +
     `docスコープ=${opts.docFolderPrefixes ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
