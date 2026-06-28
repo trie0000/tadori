@@ -38,6 +38,9 @@ export interface IngestMail {
   vttServerRelUrl?: string;
   recordingServerRelUrl?: string;
   startSec?: number;
+  /** ドキュメント (kind='doc') メタ。 */
+  docFile?: string;
+  docServerRelUrl?: string;
   /** ソース内容ハッシュ (差分判定用)。 */
   srcHash?: string;
   chunkIdx?: number;
@@ -178,6 +181,8 @@ export async function ingestToSegments(
       vttServerRelUrl: m.vttServerRelUrl,
       recordingServerRelUrl: m.recordingServerRelUrl,
       startSec: m.startSec,
+      docFile: m.docFile,
+      docServerRelUrl: m.docServerRelUrl,
       srcHash: m.srcHash,
       emb: encodeEmbedding(normalize(vecs[i])),
     }));

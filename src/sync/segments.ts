@@ -32,6 +32,9 @@ export interface SegmentRecord {
   vttServerRelUrl?: string;
   recordingServerRelUrl?: string;
   startSec?: number;
+  /** ドキュメント (kind='doc') のメタ。 */
+  docFile?: string;
+  docServerRelUrl?: string;
   /** ソース内容のハッシュ (pptx: title+rawText+tables+notes / transcript: 本文)。
    *  再取り込み時に「内容が変わっていないチャンクは embed をスキップ」する
    *  差分判定に使う。 */

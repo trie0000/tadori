@@ -34,6 +34,9 @@ export interface MailHit {
   vttServerRelUrl?: string;
   recordingServerRelUrl?: string;
   startSec?: number;
+  /** ドキュメント (kind='doc') のメタ。 */
+  docFile?: string;
+  docServerRelUrl?: string;
 }
 
 function toHit(record: MailRecord, score: number): MailHit {
@@ -62,6 +65,8 @@ function toHit(record: MailRecord, score: number): MailHit {
     vttServerRelUrl: record.vttServerRelUrl,
     recordingServerRelUrl: record.recordingServerRelUrl,
     startSec: record.startSec,
+    docFile: record.docFile,
+    docServerRelUrl: record.docServerRelUrl,
   };
 }
 

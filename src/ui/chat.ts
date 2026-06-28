@@ -23,6 +23,11 @@ import { openOneNotePage, appendOneNotePage, markdownToBlocks, fetchCurrentOneNo
 import { openPptxAtSlide } from '../sync/pptxIngest';
 import { openTranscriptSource } from '../sync/transcriptIngest';
 import { secToMmSs as secToClock } from '../transcript/vtt';
+import { openDocSource, syncDocFolder, type DocIngestProgress } from '../sync/docIngest';
+import {
+  listDocFolders, addDocFolder, removeDocFolder, deriveLabel as deriveDocLabel,
+  type DocFolderConfig,
+} from '../sync/docFolders';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1030,7 +1035,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const badgeIcon = kind === 'onenote' ? icons.notebook(12)
       : kind === 'pptx' ? icons.presentation(12)
       : kind === 'transcript' ? icons.mic(12)
-      : kind === 'doc' ? icons.folder(12)
+      : kind === 'doc' ? icons.fileText(12)
       : icons.message(12);
     const badgeLabel = kind === 'onenote' ? 'OneNote'
       : kind === 'pptx' ? 'PPTX'
@@ -1042,6 +1047,8 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       ? `${h.pptxFile} — スライド ${h.slideNo}: ${h.slideTitle || h.subject}`
       : kind === 'transcript'
       ? `${h.subject}${typeof h.startSec === 'number' ? ` — ${secToClock(h.startSec)}` : ''}`
+      : kind === 'doc' && h.docFile
+      ? `${h.docFile}${h.subject && h.subject !== h.docFile.replace(/\.[^.]+$/, '') ? ` — ${h.subject}` : ''}`
       : h.subject;
     const head = el('div', { class: 'tdr-hit-head' }, [
       el('span', { class: 'tdr-hit-num' }, [String(n)]),
@@ -1132,15 +1139,28 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         });
         head.appendChild(vttBtn);
       }
+    } else if (kind === 'doc' && h.docServerRelUrl) {
+      // 文書: SP のファイルをブラウザで開く (Office Online / 既定ビューア)。
+      const openBtn = el('button', {
+        class: 'tdr-hit-open', 'aria-label': '文書を開く', title: 'SharePoint で文書を開く',
+        html: icons.external(14),
+      });
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDocSource({ docServerRelUrl: h.docServerRelUrl });
+      });
+      head.appendChild(openBtn);
     }
     if (h.conversationId) {
       const sumLabel = kind === 'onenote' ? 'ページ全体を要約'
         : kind === 'transcript' ? '会議全体を要約'
         : kind === 'pptx' ? '資料全体を要約'
+        : kind === 'doc' ? '文書全体を要約'
         : '経緯を要約';
       const sumTitle = kind === 'onenote' ? '同じページのチャンクをまとめて要約'
         : kind === 'transcript' ? '同じ会議のチャンクをまとめて時系列で要約'
         : kind === 'pptx' ? '同じ資料の全スライドをまとめて要約'
+        : kind === 'doc' ? '同じ文書の全チャンクをまとめて要約'
         : '同じスレッドのやり取りを時系列で要約';
       const sumBtn = el('button', {
         class: 'tdr-hit-open', 'aria-label': sumLabel, title: sumTitle, html: icons.list(14),
@@ -1149,7 +1169,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       head.appendChild(sumBtn);
     }
     hitEl.appendChild(head);
-    const meta = (kind === 'onenote' || kind === 'transcript')
+    const meta = (kind === 'onenote' || kind === 'transcript' || kind === 'doc')
       ? `${h.from}  ${h.date.slice(0, 10)}${typeof h.chunkIdx === 'number' && h.chunkCount && h.chunkCount > 1 ? `  ・ チャンク #${h.chunkIdx + 1}/${h.chunkCount}` : ''}`
       : `${h.from}  ${h.date.slice(0, 10)}`;
     hitEl.appendChild(el('div', { class: 'tdr-hit-from' }, [meta]));
@@ -1175,6 +1195,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
           detail.appendChild(wrap);
         } else if (kind === 'transcript') {
           detail.appendChild(renderTranscriptHeader(h));
+          const wrap = el('div', { class: 'tdr-hit-detail-body' });
+          renderMailBody(wrap, h.body, false);
+          detail.appendChild(wrap);
+        } else if (kind === 'doc') {
+          detail.appendChild(renderDocHeader(h));
           const wrap = el('div', { class: 'tdr-hit-detail-body' });
           renderMailBody(wrap, h.body, false);
           detail.appendChild(wrap);
@@ -1251,6 +1276,25 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     return el('div', { class: 'tdr-hit-detail-head' }, [meta]);
   }
 
+  /** 文書用ヘッダ。ファイル名 + 最終更新 + チャンク位置。 */
+  function renderDocHeader(h: SavedHit): HTMLElement {
+    const meta = el('div', { class: 'tdr-hit-detail-meta' }, [
+      el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['ファイル: ']),
+        el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [h.docFile || '(不明)']),
+      ]),
+      h.date ? el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['最終更新: ']),
+        el('span', {}, [h.date.slice(0, 10)]),
+      ]) : null,
+      typeof h.chunkIdx === 'number' && h.chunkCount && h.chunkCount > 1 ? el('div', {}, [
+        el('span', { class: 'tdr-hit-detail-label' }, ['位置: ']),
+        el('span', {}, [`チャンク #${h.chunkIdx + 1}/${h.chunkCount}`]),
+      ]) : null,
+    ].filter(Boolean) as HTMLElement[]);
+    return el('div', { class: 'tdr-hit-detail-head' }, [meta]);
+  }
+
   /** 画像をオーバーレイで拡大表示 (ライトボックス)。背景クリック / Esc / ✕ で閉じる。 */
   function openImageLightbox(src: string, caption: string): void {
     const backdrop = el('div', { class: 'tdr-lightbox' });
@@ -1271,6 +1315,98 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     // frame 内クリックは閉じない (画像操作を邪魔しない)
     frame.addEventListener('click', (e) => e.stopPropagation());
     root.appendChild(backdrop);
+  }
+
+  /** 検索対象の文書フォルダを管理するモーダル (チャット画面から指定)。
+   *  フォルダ URL 登録 + 同期 + 削除。docx/doc/pdf/md/txt を取り込む。
+   *  onChange: フォルダ構成が変わったら呼ぶ (チップ再描画用)。 */
+  function openDocFolderManager(siteUrlArg: string, onChange: () => void): void {
+    const body = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-3);min-width:480px' });
+
+    const hint = el('p', { class: 'tdr-hint', style: 'margin:0' }, [
+      'SharePoint のフォルダを指定して、配下の docx / doc / pdf / md / txt を検索対象に取り込みます。',
+      'docx/doc/pdf は relay (Word COM) で本文抽出します (relay 起動が必要)。md/txt は不要。',
+    ]);
+    const urlInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'https://contoso.sharepoint.com/sites/foo/Shared Documents/資料' }) as HTMLInputElement;
+    const recursiveCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    recursiveCb.checked = true;
+    const recursiveLabel = el('label', { style: 'display:flex;align-items:center;gap:var(--s-2);font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap' }, [recursiveCb, '再帰']);
+    const addBtn = el('button', { class: 'tdr-btn' }, ['追加']);
+    const addRow = el('div', { style: 'display:flex;gap:var(--s-2);align-items:center' }, [urlInput, recursiveLabel, addBtn]);
+    const listEl = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-2)' });
+    const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);min-height:1.4em' }, ['']);
+
+    let ac: AbortController | null = null;
+
+    const renderList = (): void => {
+      listEl.replaceChildren();
+      const folders = listDocFolders(siteUrlArg);
+      if (folders.length === 0) {
+        listEl.appendChild(el('div', { class: 'tdr-hint' }, ['まだフォルダが登録されていません。']));
+        return;
+      }
+      for (const f of folders) {
+        const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
+        const fileCount = Object.keys(f.perFile).length;
+        const head = el('div', { style: 'font-weight:600;font-size:var(--fs-sm)' }, [f.label || deriveDocLabel(f.url)]);
+        const meta = el('div', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [
+          `${f.url}`, el('br'), `最終同期: ${lastSync} / 文書: ${fileCount} 件`,
+        ]);
+        const syncBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['同期']);
+        const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
+        const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [
+          head, meta, el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, delBtn]),
+        ]);
+        syncBtn.addEventListener('click', () => { void runSync([f], syncBtn); });
+        delBtn.addEventListener('click', () => {
+          removeDocFolder(siteUrlArg, f.url);
+          renderList(); onChange();
+          toast(root, 'フォルダ設定を削除しました', 'ok');
+        });
+        listEl.appendChild(card);
+      }
+    };
+
+    async function runSync(folders: DocFolderConfig[], btn: HTMLButtonElement): Promise<void> {
+      if (ac) return;
+      ac = new AbortController();
+      btn.disabled = true;
+      const s = loadSettings();
+      let chunks = 0, failed = 0, deleted = 0, skipped = 0;
+      try {
+        for (const f of folders) {
+          if (ac.signal.aborted) break;
+          const r = await syncDocFolder(f, s, siteUrlArg, (p: DocIngestProgress) => {
+            const fl = p.file ? `${p.file} (${p.fileIdx}/${p.fileTotal})` : '一覧取得中';
+            status.textContent = `${fl} — ${p.message ?? p.phase}`;
+          }, ac.signal);
+          chunks += r.ingestedChunks; failed += r.failedFiles; deleted += r.deletedFiles; skipped += r.skippedFiles;
+        }
+        const msg = `完了: ${chunks} チャンク取込 / スキップ ${skipped} / 削除 ${deleted}${failed ? ` / 失敗 ${failed}` : ''}`;
+        status.textContent = msg;
+        toast(root, msg, failed ? 'warn' : 'ok');
+        renderList(); onChange();
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') { status.textContent = '停止しました'; }
+        else { status.textContent = `失敗: ${(e as Error).message}`; toast(root, `取り込み失敗: ${(e as Error).message}`, 'error'); }
+      } finally {
+        ac = null; btn.disabled = false;
+      }
+    }
+
+    addBtn.addEventListener('click', () => {
+      const url = urlInput.value.trim();
+      if (!url) { toast(root, 'フォルダ URL を入力してください', 'warn'); return; }
+      if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) { toast(root, 'URL は https://... か /sites/... の形式で', 'warn'); return; }
+      addDocFolder(siteUrlArg, { url, recursive: recursiveCb.checked });
+      urlInput.value = '';
+      renderList(); onChange();
+      toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
+    });
+
+    body.append(hint, addRow, listEl, status);
+    openModal({ root, title: '検索対象の文書フォルダ', body, large: true });
+    renderList();
   }
 
   /** OneNote ページ用ヘッダ (件名/最終更新/ノートブック › セクション/チャンク)。 */
@@ -1479,6 +1615,27 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       });
       sourceRow.appendChild(addBtn);
     }
+    // 文書フォルダ管理ボタン (チャット画面から検索対象フォルダを指定)。
+    const folderBtn = el('button', {
+      class: 'tdr-source-add',
+      'aria-label': '文書フォルダを指定',
+      title: '検索対象の SharePoint フォルダ (docx/doc/pdf/md/txt) を指定',
+    }, [
+      el('span', { html: icons.fileText(12) }),
+      el('span', {}, ['文書フォルダ']),
+    ]);
+    folderBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDocFolderManager(siteUrl, () => {
+        // フォルダ追加後は doc を検索対象に自動 ON (まだなら)
+        if (!activeKinds.includes('doc')) {
+          activeKinds = ALL_SEARCH_KINDS.filter(x => activeKinds.includes(x) || x === 'doc');
+          setSelectedKinds(activeKinds);
+        }
+        renderSourceRow();
+      });
+    });
+    sourceRow.appendChild(folderBtn);
   };
   renderSourceRow();
 

@@ -28,6 +28,9 @@ export interface SavedHit {
   vttServerRelUrl?: string;
   recordingServerRelUrl?: string;
   startSec?: number;
+  /** ドキュメント (kind='doc') メタ。 */
+  docFile?: string;
+  docServerRelUrl?: string;
 }
 
 export interface SavedTurn {

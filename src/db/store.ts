@@ -56,6 +56,9 @@ export interface MailRecord {
   vttServerRelUrl?: string;
   recordingServerRelUrl?: string;
   startSec?: number;
+  /** ドキュメント (kind='doc') のメタ。 */
+  docFile?: string;
+  docServerRelUrl?: string;
   /** ソース内容ハッシュ (差分判定用)。 */
   srcHash?: string;
 }
@@ -126,6 +129,8 @@ export class VectorDb {
         vttServerRelUrl: r.vttServerRelUrl,
         recordingServerRelUrl: r.recordingServerRelUrl,
         startSec: r.startSec,
+        docFile: r.docFile,
+        docServerRelUrl: r.docServerRelUrl,
         srcHash: r.srcHash,
       });
     }

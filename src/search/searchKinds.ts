@@ -5,9 +5,9 @@
 //
 // 注: 'doc' (汎用文書) は内部利用なので UI には出さない (将来必要なら追加)。
 
-export type SearchKind = 'mail' | 'onenote' | 'pptx' | 'transcript';
+export type SearchKind = 'mail' | 'onenote' | 'pptx' | 'transcript' | 'doc';
 
-export const ALL_SEARCH_KINDS: readonly SearchKind[] = ['mail', 'onenote', 'pptx', 'transcript'];
+export const ALL_SEARCH_KINDS: readonly SearchKind[] = ['mail', 'onenote', 'pptx', 'transcript', 'doc'];
 
 /** UI 表示用ラベル。 */
 export const SEARCH_KIND_LABELS: Record<SearchKind, string> = {
@@ -15,6 +15,7 @@ export const SEARCH_KIND_LABELS: Record<SearchKind, string> = {
   onenote: 'OneNote',
   pptx:    'PPTX',
   transcript: '会議',
+  doc:     '文書',
 };
 
 const STORAGE_KEY = 'tadori:search-kinds';
@@ -42,9 +43,10 @@ export function setSelectedKinds(kinds: SearchKind[]): void {
 }
 
 /** チップ表示用のアイコン種別名 (icons モジュールのキー)。 */
-export const SEARCH_KIND_ICON: Record<SearchKind, 'message' | 'notebook' | 'presentation' | 'mic'> = {
+export const SEARCH_KIND_ICON: Record<SearchKind, 'message' | 'notebook' | 'presentation' | 'mic' | 'fileText'> = {
   mail:    'message',
   onenote: 'notebook',
   pptx:    'presentation',
   transcript: 'mic',
+  doc:     'fileText',
 };
