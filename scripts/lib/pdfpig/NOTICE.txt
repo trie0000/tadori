@@ -20,3 +20,12 @@ Office / Word は不要です。
   - UglyToad.PdfPig.Tokenization.dll
   - UglyToad.PdfPig.Tokens.dll
 (いずれも net471 ターゲット。Windows PowerShell 5.1 / .NET Framework 4.7.1+ で動作)
+
+--- 実行時依存 (net461, NuGet, MIT License) ---
+PdfPig は以下の Microsoft 製アセンブリに依存します。.NET Framework には同梱
+されないため、relay 用に net461 ビルドを同梱しています (いずれも MIT):
+  - System.Memory 4.5.5
+  - System.Buffers 4.5.1
+  - System.Numerics.Vectors 4.5.0
+  - System.Runtime.CompilerServices.Unsafe 4.5.3
+  - Microsoft.Bcl.HashCode 1.1.1
