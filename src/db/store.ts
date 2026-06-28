@@ -121,19 +121,37 @@ export class VectorDb {
     return out;
   }
 
+  /** 直近 applySegment の落とし込み統計 (診断用)。 */
+  lastApply: { records: number; applied: number; droppedOldSeq: number; droppedNoEmb: number; deletes: number; byKind: Record<string, number> } =
+    { records: 0, applied: 0, droppedOldSeq: 0, droppedNoEmb: 0, deletes: 0, byKind: {} };
+
   applySegment(seg: Segment): void {
     const recs = [...seg.records].sort((a, b) => a.seq - b.seq);
-    for (const r of recs) this.applyRecord(r);
+    const st = { records: recs.length, applied: 0, droppedOldSeq: 0, droppedNoEmb: 0, deletes: 0, byKind: {} as Record<string, number> };
+    for (const r of recs) {
+      const k = r.kind ?? 'mail';
+      st.byKind[k] = (st.byKind[k] ?? 0) + 1;
+      const res = this.applyRecord(r);
+      if (res === 'oldseq') st.droppedOldSeq++;
+      else if (res === 'noemb') st.droppedNoEmb++;
+      else if (res === 'delete') st.deletes++;
+      else st.applied++;
+    }
+    this.lastApply = st;
   }
 
-  applyRecord(r: SegmentRecord): void {
+  /** 適用結果コード: '' = upsert 適用 / 'oldseq' / 'noemb' / 'delete'。 */
+  applyRecord(r: SegmentRecord): '' | 'oldseq' | 'noemb' | 'delete' {
     const prev = this.appliedSeq.get(r.messageId) ?? 0;
-    if (r.seq <= prev) return; // 古い → last-writer-wins で無視 (冪等)
+    if (r.seq <= prev) return 'oldseq'; // 古い → last-writer-wins で無視 (冪等)
     this.kwCache.delete(r.messageId); // 内容が変わる → キーワード索引を無効化
     if (r.op === 'delete') {
       this.records.delete(r.messageId);
+      this.appliedSeq.set(r.messageId, r.seq);
+      if (r.seq > this.maxSeq) this.maxSeq = r.seq;
+      return 'delete';
     } else {
-      if (!r.emb) return; // upsert は埋め込み必須
+      if (!r.emb) return 'noemb'; // upsert は埋め込み必須
       this.records.set(r.messageId, {
         messageId: r.messageId,
         internetMessageId: r.internetMessageId ?? '',

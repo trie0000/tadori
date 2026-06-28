@@ -6,6 +6,16 @@ import { SpVectorStore } from './spStore';
 import { SegmentCache } from '../db/cache';
 import { VectorDb } from '../db/store';
 import { missingSealed, type Manifest } from './segments';
+import { relayLog } from '../lib/relayLog';
+
+/** doc/transcript を含むセグメントだけ詳細を relay へ。なぜ DB に入らないかの切り分け用。 */
+function logSeg(where: string, id: string, db: VectorDb): void {
+  const a = db.lastApply;
+  const interesting = (a.byKind['doc'] ?? 0) + (a.byKind['transcript'] ?? 0) > 0;
+  if (!interesting) return;
+  relayLog(`[${where}] seg=${id} records=${a.records} 種別=${JSON.stringify(a.byKind)} ` +
+    `→ 適用=${a.applied} 削除=${a.deletes} 棄却(emb無)=${a.droppedNoEmb} 棄却(seq古)=${a.droppedOldSeq}`);
+}
 
 export interface SyncResult {
   loadedFromCache: number;
@@ -32,10 +42,11 @@ export class VectorSync {
     let i = 0;
     for (const id of cachedIds) {
       const seg = await this.cache.get(id);
-      if (seg) this.db.applySegment(seg);
+      if (seg) { this.db.applySegment(seg); logSeg('cache', id, this.db); }
       onProgress?.('cache', ++i, cachedIds.length);
     }
     const have = new Set(cachedIds);
+    relayLog(`同期: キャッシュ ${cachedIds.length}seg 適用後 DB=${this.db.size} 種別=${JSON.stringify(this.db.kindCounts())}`);
 
     // 2. manifest 取得 (無ければ origin 未作成 → キャッシュ分のみで終了)
     onProgress?.('manifest', 0, 0);
@@ -50,18 +61,26 @@ export class VectorSync {
     if (manifest.open && this.openChanged(manifest, prevManifest, have)) {
       toFetch.push(manifest.open.id);
     }
+    relayLog(`同期: manifest sealed=${manifest.sealed.length}${manifest.open ? '+open' : ''} ` +
+      `キャッシュ済=${have.size} 要DL=${toFetch.length}`);
 
     // 4. DL → 適用 → キャッシュ
     let dl = 0;
+    let fetchFail = 0;
     for (const id of toFetch) {
       const seg = await this.store.readSegment(id);
       if (seg) {
         this.db.applySegment(seg);
+        logSeg('DL', id, this.db);
         await this.cache.put(id, seg);
         dl++;
+      } else {
+        fetchFail++;
+        relayLog(`同期: seg=${id} の取得に失敗 (readSegment が null)`);
       }
       onProgress?.('download', dl, toFetch.length);
     }
+    if (fetchFail > 0) relayLog(`同期: DL 失敗 ${fetchFail}件`);
 
     // 5. コンパクション世代変化なら、manifest に無いキャッシュを掃除
     await this.pruneOrphans(manifest);
@@ -71,6 +90,7 @@ export class VectorSync {
       manifestSealed: manifest.sealed.length + (manifest.open ? 1 : 0),
       cached: cachedIds.length, downloaded: dl, dbSize: this.db.size,
     };
+    relayLog(`同期 完了: DB=${this.db.size} 種別=${JSON.stringify(this.db.kindCounts())}`);
     return { loadedFromCache: cachedIds.length, downloaded: dl, total: this.db.size };
   }
 
