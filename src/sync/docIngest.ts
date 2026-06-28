@@ -19,10 +19,19 @@ import { ingestToSegments, deleteFromSegments, type IngestMail } from '../db/wri
 import { getEngine } from '../db/engine';
 import type { RuntimeSettings } from '../api/aiSettings';
 import { updateDocFolderSync, type DocFolderConfig } from './docFolders';
+import { docxToText, xlsxToText } from '../docs/docxText';
+import { pdfToText } from '../docs/pdfText';
 
-/** 対応拡張子。relay でパースが要るもの (needsRelay) とブラウザで読めるもの。 */
-const RELAY_EXT = new Set(['.docx', '.doc', '.pdf', '.rtf']);
+// すべてブラウザ内でパースする (Word/Excel/relay 不要)。
+//   .md/.txt → TextDecoder
+//   .docx/.xlsx → ネイティブ ZIP 解凍 + XML 抽出 (docxText.ts)
+//   .pdf → pdf.js (pdfText.ts)
+// .doc (旧バイナリ) / .rtf は専用フォーマットなので現状未対応 (UNSUPPORTED で通知)。
 const TEXT_EXT = new Set(['.md', '.markdown', '.txt']);
+const DOCX_EXT = new Set(['.docx']);
+const XLSX_EXT = new Set(['.xlsx']);
+const PDF_EXT = new Set(['.pdf']);
+const ALL_EXT = new Set([...TEXT_EXT, ...DOCX_EXT, ...XLSX_EXT, ...PDF_EXT]);
 
 export interface DocIngestProgress {
   file: string;
@@ -71,9 +80,17 @@ function filterDocFiles(items: FileInfo[]): FileInfo[] {
   return items.filter(f => {
     const n = f.name.toLowerCase();
     if (n.startsWith('~$') || n.startsWith('.')) return false;
-    const e = extOf(n);
-    return RELAY_EXT.has(e) || TEXT_EXT.has(e);
+    return ALL_EXT.has(extOf(n));
   });
+}
+
+/** ファイルバイト列をブラウザだけでテキスト化。Word/relay 不要。 */
+async function extractText(ext: string, bytes: ArrayBuffer, signal?: AbortSignal): Promise<string> {
+  if (TEXT_EXT.has(ext)) return new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, '');
+  if (DOCX_EXT.has(ext)) return docxToText(bytes);
+  if (XLSX_EXT.has(ext)) return xlsxToText(bytes);
+  if (PDF_EXT.has(ext)) return pdfToText(bytes, signal);
+  throw new Error(`未対応の形式: ${ext}`);
 }
 
 function pickTargets(now: FileInfo[], prev: Record<string, string>, force = false, targetFiles?: ReadonlySet<string>): {
@@ -99,45 +116,6 @@ function hashStr(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
   return (h >>> 0).toString(36);
-}
-
-/** relay の Word COM でテキスト抽出。 */
-async function relayDocExtract(relayBaseUrl: string, bytes: ArrayBuffer, fileName: string, signal?: AbortSignal): Promise<string> {
-  if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です (AI 接続で設定)');
-  const url = `${relayBaseUrl.replace(/\/+$/, '')}/tadori/doc-extract`;
-  console.log(`[tadori] doc-extract POST ${url} (${fileName}, ${(bytes.byteLength / 1024).toFixed(0)} KB)`);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream', 'X-Tadori-Filename': encodeURIComponent(fileName) },
-      body: bytes, signal,
-    });
-  } catch (e) {
-    // fetch 自体が投げる = ネットワーク/CORS/PNA レベルの失敗 (relay にレスポンスを返させられていない)。
-    // よくある原因を具体的に案内する。
-    const msg = (e as Error).message || String(e);
-    throw new Error(
-      `relay (${url}) への通信に失敗しました: ${msg}\n` +
-      `考えられる原因:\n` +
-      `  ・relay が古い (doc-extract 未対応) → git pull 後に relay を完全再起動\n` +
-      `  ・Word 未インストール / PDF 変換ダイアログでハング → relay ウィンドウのログを確認\n` +
-      `  ・Chrome のローカルネットワークアクセス(PNA)ブロック → アドレスバーの許可\n` +
-      `  ・大きい PDF で処理が長時間化 → relay ログで open に時間がかかっていないか確認`,
-    );
-  }
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`relay /doc-extract HTTP ${res.status} ${t.slice(0, 400)}`);
-  }
-  const json = await res.json() as { ok?: boolean; text?: string; error?: { code?: string; detail?: string } };
-  if (!json.ok) {
-    const code = json.error?.code ?? 'unknown';
-    const detail = json.error?.detail ?? '(詳細なし)';
-    throw new Error(`relay /doc-extract 失敗 [${code}]: ${detail}`);
-  }
-  console.log(`[tadori] doc-extract OK (${fileName}, ${(json.text ?? '').length} chars)`);
-  return json.text ?? '';
 }
 
 /** SP のファイルをブラウザで開く (Office Online / 既定ビューア)。 */
@@ -207,14 +185,10 @@ export async function syncDocFolder(
       }
 
       onProgress?.({ file: f.name, fileIdx, fileTotal, chunkIdx: 0, chunkTotal: 0, phase: 'parse', message: `${f.name} を解析中…` });
-      let text = '';
-      if (TEXT_EXT.has(e)) {
-        text = new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, '');
-      } else {
-        // docx/doc/pdf/rtf → relay
-        text = await relayDocExtract(s.relayBaseUrl, bytes, f.name, signal);
-      }
-      text = (text || '').trim();
+      // すべてブラウザ内でパース (Word/relay 不要)。
+      console.log(`[tadori] doc parse: ${f.name} (${(bytes.byteLength / 1024).toFixed(0)} KB, ${e})`);
+      let text = (await extractText(e, bytes, signal)).trim();
+      console.log(`[tadori] doc parsed: ${f.name} → ${text.length} chars`);
       if (!text) {
         onProgress?.({ file: f.name, fileIdx, fileTotal, chunkIdx: 0, chunkTotal: 0, phase: 'skip', message: `${f.name} からテキストを抽出できませんでした` });
         newPerFile[f.name] = f.timeLastModified;

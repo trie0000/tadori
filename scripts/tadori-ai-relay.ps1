@@ -201,7 +201,6 @@ Write-Host "  GET  $baseUrlShort/tadori/onenote/tadori-outlines (Tadori が追�
 Write-Host "  POST $baseUrlShort/tadori/onenote/replace-outline (Tadori 追記 Outline を上書き: body={pageId,outlineId,heading,blocks,user})"
 Write-Host "  POST $baseUrlShort/tadori/pptx-extract     (PPTX を slide 配列に展開: body=octet-stream, header X-Tadori-Filename)"
 Write-Host "  POST $baseUrlShort/tadori/pptx-open        (PowerPoint で fileUrl + slideNo へジャンプ: body={fileUrl,slideNo})"
-Write-Host "  POST $baseUrlShort/tadori/doc-extract      (docx/doc/pdf/rtf を Word COM でテキスト抽出: body=octet-stream, header X-Tadori-Filename)"
 Write-Host "  GET  $baseUrlShort/tadori/onenote/current   (OneNote で現在表示中のページ ID を返す)"
 Write-Host "  GET  $baseUrlShort/tadori/onenote/links     (指定ページ ID 群の OneNote リンクを返す: ?ids=)"
 Write-Host "  GET  $baseUrlShort/tadori/tadori.bundle.js (開発: ローカル dist のバンドル配信)"
@@ -1446,113 +1445,6 @@ public static class Native {
 }
 
 
-# ─── Word COM (ドキュメント取り込み: docx / doc / pdf / rtf) ─────────────────
-# Word は docx / doc / pdf / rtf を開いてプレーンテキストを抽出できる
-# (PDF は Word 2013+ が変換して開く)。md / txt はブラウザ側で読むので relay は不要。
-# Word COM も単一スレッドなので Mutex で逐次化する。
-
-$script:WordComMutex = New-Object System.Threading.Mutex($false, "Global\TadoriWordCom")
-
-function Get-WordOrNull {
-    try {
-        try { return [Runtime.InteropServices.Marshal]::GetActiveObject('Word.Application') }
-        catch { return (New-Object -ComObject Word.Application) }
-    } catch { return $null }
-}
-
-# POST /tadori/doc-extract
-# 入力: 生ファイルバイナリ (octet-stream) + Header X-Tadori-Filename
-# 出力: { ok, text }
-function Invoke-DocExtract {
-    param([System.Net.HttpListenerContext]$Context)
-    $response = $Context.Response
-    $request = $Context.Request
-    if ($request.HttpMethod.ToUpper() -ne 'POST') {
-        Send-Error -Response $response -Status 405 -Code 'method_not_allowed' -Detail 'POST のみ受付'; return
-    }
-
-    $ms = New-Object System.IO.MemoryStream
-    try { $request.InputStream.CopyTo($ms) } catch {
-        Send-Error -Response $response -Status 400 -Code 'read_error' -Detail $_.Exception.Message; return
-    }
-    $bytes = $ms.ToArray(); $ms.Dispose()
-    if ($bytes.Length -lt 10) {
-        Send-Error -Response $response -Status 400 -Code 'empty_body' -Detail 'ファイルが空です'; return
-    }
-
-    $origName = ''
-    try { $origName = [string]$request.Headers['X-Tadori-Filename'] } catch { }
-    if (-not $origName) { $origName = 'input.docx' }
-    # 拡張子を URL デコードして temp ファイル名に反映 (Word は拡張子で形式判定する)
-    try { $origName = [System.Uri]::UnescapeDataString($origName) } catch { }
-    $ext = [System.IO.Path]::GetExtension($origName)
-    if (-not $ext) { $ext = '.docx' }
-
-    Write-Host ("[doc] >>> extract 開始: {0} ({1} bytes, ext={2})" -f $origName, $bytes.Length, $ext) -ForegroundColor Cyan
-
-    $hasLock = $false
-    try { $hasLock = $script:WordComMutex.WaitOne([TimeSpan]::FromMinutes(5)) } catch { $hasLock = $false }
-    if (-not $hasLock) {
-        Write-Host "[doc] !! mutex 取得失敗 (他の取り込みが進行中)" -ForegroundColor Yellow
-        Send-Error -Response $response -Status 503 -Code 'mutex_timeout' -Detail '他のドキュメント取り込みが進行中'; return
-    }
-
-    $tempDir = Join-Path $env:TEMP ("tadori-doc-" + [Guid]::NewGuid().ToString('N'))
-    $word = $null
-    $doc = $null
-    try {
-        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-        $tempFile = Join-Path $tempDir ("input" + $ext)
-        [IO.File]::WriteAllBytes($tempFile, $bytes)
-        Write-Host ("[doc]   temp 保存: {0}" -f $tempFile)
-
-        Write-Host "[doc]   Word COM 取得中…"
-        $word = Get-WordOrNull
-        if (-not $word) {
-            Write-Host "[doc] !! Word を起動/接続できません (Windows + Word が必要)" -ForegroundColor Red
-            Send-Error -Response $response -Status 503 -Code 'no_word' -Detail 'Word を起動/接続できませんでした (Windows + Word が必要)'
-            return
-        }
-        try { $word.Visible = $false } catch { }
-        try { $word.DisplayAlerts = 0 } catch { }            # wdAlertsNone
-        try { $word.AutomationSecurity = 3 } catch { }        # msoAutomationSecurityForceDisable (マクロ無効)
-        try { $word.Options.ConfirmConversions = $false } catch { }
-        try { $word.Options.UpdateLinksAtOpen = $false } catch { }
-        try { $word.FileValidation = 0 } catch { }            # msoFileValidationSkip (検証ダイアログ抑止)
-
-        # PDF を Word で開くと変換確認ダイアログでハングしやすい。
-        # ext で分岐し、PDF は明示的に Format=wdOpenFormatAuto + 変換確認 off。
-        Write-Host ("[doc]   Word で open 中… (ext={0}, PDF は変換に時間がかかる場合あり)" -f $ext)
-        $swOpen = [Diagnostics.Stopwatch]::StartNew()
-        # Open(FileName, ConfirmConversions=$false, ReadOnly=$true, AddToRecentFiles=$false,
-        #      PasswordDocument="", PasswordTemplate="", Revert=$false, ...)
-        $doc = $word.Documents.Open($tempFile, $false, $true, $false, "", "", $false)
-        $swOpen.Stop()
-        Write-Host ("[doc]   open 完了 ({0} ms)。本文抽出中…" -f $swOpen.ElapsedMilliseconds)
-
-        $text = ''
-        try { $text = [string]$doc.Content.Text } catch { $text = '' }
-
-        Write-Host ("[doc] <<< 完了: {0} ({1} chars)" -f $origName, $text.Length) -ForegroundColor Green
-        Send-Json -Response $response -Status 200 -Body @{ ok = $true; text = $text }
-    } catch {
-        $msg = $_.Exception.Message
-        Write-Host ("[doc] !! ERROR: {0}" -f $msg) -ForegroundColor Red
-        if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
-        # HRESULT も出す (COM エラーの特定に有用)
-        try { Write-Host ("[doc]    HRESULT: 0x{0:X8}" -f $_.Exception.HResult) -ForegroundColor DarkGray } catch { }
-        Send-Error -Response $response -Status 500 -Code 'doc_error' -Detail $msg
-    } finally {
-        if ($doc) { try { $doc.Close([bool]$false) } catch { } }   # 保存せず閉じる
-        try { [Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null } catch { }
-        # Word プロセスは引用ジャンプ等で再利用するため Quit しない (relay 終了で道連れ)。
-        try { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
-        if ($hasLock) { try { $script:WordComMutex.ReleaseMutex() } catch { } }
-        [GC]::Collect()
-    }
-}
-
-
 # ─── Request handler ────────────────────────────────────────────────────────
 
 function Invoke-RelayRequest {
@@ -1605,8 +1497,6 @@ function Invoke-RelayRequest {
     if ($path -eq '/tadori/pptx-extract') { Invoke-PptxExtract -Context $Context; return }
     if ($path -eq '/tadori/pptx-open')    { Invoke-PptxOpen    -Context $Context; return }
 
-    # ── ローカル機能: ドキュメント取り込み (docx/doc/pdf/rtf を Word COM で抽出) ──
-    if ($path -eq '/tadori/doc-extract')  { Invoke-DocExtract  -Context $Context; return }
 
     # ── 開発者モード: ローカル dist のバンドル配信 (loader が読む) ──
     if ($path -eq '/tadori/tadori.bundle.js') {
