@@ -6,6 +6,7 @@ import { embedQueryFor } from '../embeddings/router';
 import type { MailRecord } from '../db/store';
 import type { RuntimeSettings } from '../api/aiSettings';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
+import { makeDocInScope } from './docScope';
 
 /** 診断メッセージを relay コンソールに表示させる (ブラウザ Console が読みづらい時用)。
  *  fire-and-forget。relay 未起動なら黙って無視。 */
@@ -131,26 +132,8 @@ export async function searchVectors(
     `docスコープ=${opts.docFolderPrefixes && opts.docFolderPrefixes.length > 0 ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
     `次元分布=${JSON.stringify(dimk)}`);
   console.log('[tadori] search:', { dbSize: eng.db.size, kinds: kc, dimByKind: dimk, kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
-  // doc のフォルダスコープ (serverRelativeUrl 接頭辞)。undefined なら絞らない。
-  // URL エンコード差 (%20 vs スペース) を吸収するため decode + 小文字化して比較。
-  const normUrl = (s: string): string => {
-    let v = s.trim().replace(/\/+$/, '');
-    try { v = decodeURIComponent(v); } catch { /* keep */ }
-    return v.toLowerCase();
-  };
-  // 空配列は「フォルダ指定なし = 全部」を意味する (どのフォルダにも一致しない、ではない)。
-  // 空配列を渡すと [].some(...) が常に false になり doc 全件が消える不具合があったため、
-  // length===0 は null と同等 (絞り込みなし) として扱う。
-  const docPrefixes = (opts.docFolderPrefixes && opts.docFolderPrefixes.length > 0)
-    ? opts.docFolderPrefixes.map(normUrl) : null;
-  const docInScope = (record: { kind?: string; docServerRelUrl?: string; conversationId?: string }): boolean => {
-    if (record.kind !== 'doc' || docPrefixes == null) return true; // doc 以外 / 絞り込み無しは通す
-    // docServerRelUrl が無い古いレコードは conversationId を代用。両方無ければ除外しない (安全側で通す)。
-    const raw = record.docServerRelUrl || record.conversationId || '';
-    if (!raw) return true;
-    const u = normUrl(raw);
-    return docPrefixes.some(p => u === p || u.startsWith(p + '/'));
-  };
+  // doc のフォルダスコープ判定 (空/未指定なら全通し)。本番もテストもこの同一関数を使う。
+  const docInScope = makeDocInScope(opts.docFolderPrefixes);
 
   // レコードが必須キーワードを「全部」含むかチェック (件名+本文を対象、大文字小文字無視)。
   const containsAll = (record: { subject: string; body: string }): boolean => {
