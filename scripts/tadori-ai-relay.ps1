@@ -1180,17 +1180,24 @@ function Ensure-PdfPig {
     }
     try {
         # 依存解決: lib フォルダ内の DLL を AssemblyResolve で拾えるようにする。
+        # ※ Register-ObjectEvent は AssemblyResolve (Assembly を return するイベント) に
+        #    使えない ("戻り値が必要なイベントはサポートされていません")。型付きの
+        #    [ResolveEventHandler] を add_AssemblyResolve で直接登録するのが正しい方法。
         $script:PdfPigLibDir = $libDir
-        Register-ObjectEvent -InputObject ([AppDomain]::CurrentDomain) -EventName AssemblyResolve -Action {
-            param($s, $e)
-            try {
-                $simple = ($e.Name -split ',')[0].Trim()
-                $cand = Join-Path $using:libDir ("$simple.dll")
-                if (Test-Path -LiteralPath $cand) { return [Reflection.Assembly]::LoadFrom($cand) }
-            } catch { }
-            return $null
-        } | Out-Null
-        # 依存 → 本体の順でロード
+        if (-not $script:PdfPigResolverAdded) {
+            $resolver = [System.ResolveEventHandler] {
+                param($s, $e)
+                try {
+                    $simple = ($e.Name -split ',')[0].Trim()
+                    $cand = Join-Path $script:PdfPigLibDir ("$simple.dll")
+                    if (Test-Path -LiteralPath $cand) { return [Reflection.Assembly]::LoadFrom($cand) }
+                } catch { }
+                return $null
+            }
+            [AppDomain]::CurrentDomain.add_AssemblyResolve($resolver)
+            $script:PdfPigResolverAdded = $true
+        }
+        # 依存 → 本体の順で eager ロード (これだけで通常 AssemblyResolve は発火しない)
         foreach ($n in @('UglyToad.PdfPig.Core','UglyToad.PdfPig.Tokens','UglyToad.PdfPig.Tokenization','UglyToad.PdfPig.Fonts','UglyToad.PdfPig')) {
             $p = Join-Path $libDir "$n.dll"
             if (Test-Path -LiteralPath $p) { [Reflection.Assembly]::LoadFrom($p) | Out-Null }
