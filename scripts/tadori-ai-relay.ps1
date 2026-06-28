@@ -1488,9 +1488,12 @@ function Invoke-DocExtract {
     $ext = [System.IO.Path]::GetExtension($origName)
     if (-not $ext) { $ext = '.docx' }
 
+    Write-Host ("[doc] >>> extract 開始: {0} ({1} bytes, ext={2})" -f $origName, $bytes.Length, $ext) -ForegroundColor Cyan
+
     $hasLock = $false
     try { $hasLock = $script:WordComMutex.WaitOne([TimeSpan]::FromMinutes(5)) } catch { $hasLock = $false }
     if (-not $hasLock) {
+        Write-Host "[doc] !! mutex 取得失敗 (他の取り込みが進行中)" -ForegroundColor Yellow
         Send-Error -Response $response -Status 503 -Code 'mutex_timeout' -Detail '他のドキュメント取り込みが進行中'; return
     }
 
@@ -1501,25 +1504,44 @@ function Invoke-DocExtract {
         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
         $tempFile = Join-Path $tempDir ("input" + $ext)
         [IO.File]::WriteAllBytes($tempFile, $bytes)
+        Write-Host ("[doc]   temp 保存: {0}" -f $tempFile)
 
+        Write-Host "[doc]   Word COM 取得中…"
         $word = Get-WordOrNull
         if (-not $word) {
+            Write-Host "[doc] !! Word を起動/接続できません (Windows + Word が必要)" -ForegroundColor Red
             Send-Error -Response $response -Status 503 -Code 'no_word' -Detail 'Word を起動/接続できませんでした (Windows + Word が必要)'
             return
         }
         try { $word.Visible = $false } catch { }
-        try { $word.DisplayAlerts = 0 } catch { }  # wdAlertsNone (PDF 変換確認等を抑止)
+        try { $word.DisplayAlerts = 0 } catch { }            # wdAlertsNone
+        try { $word.AutomationSecurity = 3 } catch { }        # msoAutomationSecurityForceDisable (マクロ無効)
+        try { $word.Options.ConfirmConversions = $false } catch { }
+        try { $word.Options.UpdateLinksAtOpen = $false } catch { }
+        try { $word.FileValidation = 0 } catch { }            # msoFileValidationSkip (検証ダイアログ抑止)
 
-        # Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, ...)
-        # ReadOnly=$true でオリジナル相当 (temp コピーだが念のため)。PDF は自動変換。
-        $doc = $word.Documents.Open($tempFile, $false, $true, $false)
+        # PDF を Word で開くと変換確認ダイアログでハングしやすい。
+        # ext で分岐し、PDF は明示的に Format=wdOpenFormatAuto + 変換確認 off。
+        Write-Host ("[doc]   Word で open 中… (ext={0}, PDF は変換に時間がかかる場合あり)" -f $ext)
+        $swOpen = [Diagnostics.Stopwatch]::StartNew()
+        # Open(FileName, ConfirmConversions=$false, ReadOnly=$true, AddToRecentFiles=$false,
+        #      PasswordDocument="", PasswordTemplate="", Revert=$false, ...)
+        $doc = $word.Documents.Open($tempFile, $false, $true, $false, "", "", $false)
+        $swOpen.Stop()
+        Write-Host ("[doc]   open 完了 ({0} ms)。本文抽出中…" -f $swOpen.ElapsedMilliseconds)
+
         $text = ''
         try { $text = [string]$doc.Content.Text } catch { $text = '' }
 
-        Write-Host ("[doc] extract: {0} ({1} chars)" -f $origName, $text.Length)
+        Write-Host ("[doc] <<< 完了: {0} ({1} chars)" -f $origName, $text.Length) -ForegroundColor Green
         Send-Json -Response $response -Status 200 -Body @{ ok = $true; text = $text }
     } catch {
-        Send-Error -Response $response -Status 500 -Code 'doc_error' -Detail $_.Exception.Message
+        $msg = $_.Exception.Message
+        Write-Host ("[doc] !! ERROR: {0}" -f $msg) -ForegroundColor Red
+        if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+        # HRESULT も出す (COM エラーの特定に有用)
+        try { Write-Host ("[doc]    HRESULT: 0x{0:X8}" -f $_.Exception.HResult) -ForegroundColor DarkGray } catch { }
+        Send-Error -Response $response -Status 500 -Code 'doc_error' -Detail $msg
     } finally {
         if ($doc) { try { $doc.Close([bool]$false) } catch { } }   # 保存せず閉じる
         try { [Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null } catch { }

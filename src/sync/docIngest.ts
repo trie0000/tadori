@@ -105,17 +105,38 @@ function hashStr(s: string): string {
 async function relayDocExtract(relayBaseUrl: string, bytes: ArrayBuffer, fileName: string, signal?: AbortSignal): Promise<string> {
   if (!relayBaseUrl) throw new Error('中継サーバ URL が未設定です (AI 接続で設定)');
   const url = `${relayBaseUrl.replace(/\/+$/, '')}/tadori/doc-extract`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream', 'X-Tadori-Filename': encodeURIComponent(fileName) },
-    body: bytes, signal,
-  });
+  console.log(`[tadori] doc-extract POST ${url} (${fileName}, ${(bytes.byteLength / 1024).toFixed(0)} KB)`);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Tadori-Filename': encodeURIComponent(fileName) },
+      body: bytes, signal,
+    });
+  } catch (e) {
+    // fetch 自体が投げる = ネットワーク/CORS/PNA レベルの失敗 (relay にレスポンスを返させられていない)。
+    // よくある原因を具体的に案内する。
+    const msg = (e as Error).message || String(e);
+    throw new Error(
+      `relay (${url}) への通信に失敗しました: ${msg}\n` +
+      `考えられる原因:\n` +
+      `  ・relay が古い (doc-extract 未対応) → git pull 後に relay を完全再起動\n` +
+      `  ・Word 未インストール / PDF 変換ダイアログでハング → relay ウィンドウのログを確認\n` +
+      `  ・Chrome のローカルネットワークアクセス(PNA)ブロック → アドレスバーの許可\n` +
+      `  ・大きい PDF で処理が長時間化 → relay ログで open に時間がかかっていないか確認`,
+    );
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    throw new Error(`relay /doc-extract HTTP ${res.status} ${t.slice(0, 300)}`);
+    throw new Error(`relay /doc-extract HTTP ${res.status} ${t.slice(0, 400)}`);
   }
-  const json = await res.json() as { ok?: boolean; text?: string };
-  if (!json.ok) throw new Error('relay /doc-extract: 失敗');
+  const json = await res.json() as { ok?: boolean; text?: string; error?: { code?: string; detail?: string } };
+  if (!json.ok) {
+    const code = json.error?.code ?? 'unknown';
+    const detail = json.error?.detail ?? '(詳細なし)';
+    throw new Error(`relay /doc-extract 失敗 [${code}]: ${detail}`);
+  }
+  console.log(`[tadori] doc-extract OK (${fileName}, ${(json.text ?? '').length} chars)`);
   return json.text ?? '';
 }
 
