@@ -184,6 +184,7 @@ export class VectorDb {
     }
     this.appliedSeq.set(r.messageId, r.seq);
     if (r.seq > this.maxSeq) this.maxSeq = r.seq;
+    return ''; // upsert 適用
   }
 
   /** Top-K 検索。keywordWeight>0 ならハイブリッド (ベクトル + 文字bigramキーワード) の

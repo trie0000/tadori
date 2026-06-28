@@ -128,7 +128,7 @@ export async function searchVectors(
     `manifest_seg数=${eng.sync.lastStats.manifestSealed} DL数=${eng.sync.lastStats.downloaded} ` +
     `DB件数=${eng.db.size} 種別=${JSON.stringify(kc)} ` +
     `kindFilter=${JSON.stringify(opts.kinds ?? '全部')} ` +
-    `docスコープ=${opts.docFolderPrefixes ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
+    `docスコープ=${opts.docFolderPrefixes && opts.docFolderPrefixes.length > 0 ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
     `次元分布=${JSON.stringify(dimk)}`);
   console.log('[tadori] search:', { dbSize: eng.db.size, kinds: kc, dimByKind: dimk, kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
   // doc のフォルダスコープ (serverRelativeUrl 接頭辞)。undefined なら絞らない。
@@ -138,7 +138,11 @@ export async function searchVectors(
     try { v = decodeURIComponent(v); } catch { /* keep */ }
     return v.toLowerCase();
   };
-  const docPrefixes = opts.docFolderPrefixes ? opts.docFolderPrefixes.map(normUrl) : null;
+  // 空配列は「フォルダ指定なし = 全部」を意味する (どのフォルダにも一致しない、ではない)。
+  // 空配列を渡すと [].some(...) が常に false になり doc 全件が消える不具合があったため、
+  // length===0 は null と同等 (絞り込みなし) として扱う。
+  const docPrefixes = (opts.docFolderPrefixes && opts.docFolderPrefixes.length > 0)
+    ? opts.docFolderPrefixes.map(normUrl) : null;
   const docInScope = (record: { kind?: string; docServerRelUrl?: string; conversationId?: string }): boolean => {
     if (record.kind !== 'doc' || docPrefixes == null) return true; // doc 以外 / 絞り込み無しは通す
     // docServerRelUrl が無い古いレコードは conversationId を代用。両方無ければ除外しない (安全側で通す)。
