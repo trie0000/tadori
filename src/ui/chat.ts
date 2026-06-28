@@ -1345,6 +1345,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       const persist = (): void => {
         const selected = folders.filter(f => inScope.has(norm(f.url))).map(f => f.url);
         setDocSearchScope(siteUrlArg, selected);
+        // フォルダを 1 つでも選んだら doc を検索対象に自動 ON。全部外したら doc を OFF。
+        const anySelected = selected.length > 0;
+        if (anySelected && !activeKinds.includes('doc')) {
+          activeKinds = ALL_SEARCH_KINDS.filter(x => activeKinds.includes(x) || x === 'doc');
+          setSelectedKinds(activeKinds);
+        } else if (!anySelected && activeKinds.includes('doc')) {
+          activeKinds = activeKinds.filter(x => x !== 'doc');
+          setSelectedKinds(activeKinds);
+        }
         onChange();
       };
 
@@ -1370,11 +1379,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     }
 
     document.body.appendChild(menu);
-    const r = anchor.getBoundingClientRect();
-    menu.style.position = 'fixed';
-    menu.style.left = `${Math.max(8, r.left)}px`;
-    menu.style.top  = `${r.bottom + 4}px`;
-    menu.style.zIndex = '2147483700';
+    placeMenuNearAnchor(menu, anchor);
     const onDoc = (e: Event): void => {
       if (e.target instanceof Node && menu.contains(e.target)) return;
       document.removeEventListener('mousedown', onDoc);
@@ -1573,8 +1578,9 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         sourceRow.appendChild(chip);
       }
     }
-    // 未追加の kind があれば「+ ソース追加」ボタンを表示
-    const inactive = ALL_SEARCH_KINDS.filter(k => !activeKinds.includes(k));
+    // 未追加の kind があれば「+ ソース追加」ボタンを表示。
+    // doc は「文書フォルダ」ボタン経由で扱うので、汎用追加メニューには出さない。
+    const inactive = ALL_SEARCH_KINDS.filter(k => !activeKinds.includes(k) && k !== 'doc');
     if (inactive.length > 0) {
       const addBtn = el('button', {
         class: 'tdr-source-add',
@@ -1597,9 +1603,11 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       sourceRow.appendChild(addBtn);
     }
     // 文書フォルダ スコープ選択ボタン (取り込み済みフォルダのうち検索に含めるものを選ぶ)。
+    // フォルダ登録があれば doc が未選択でも表示し、フォルダを選ぶと doc を自動 ON にする。
     // フォルダの登録・取り込みは設定 → 取り込み → ドキュメント取り込み で行う。
     const docFolders = listDocFolders(siteUrl);
-    if (docFolders.length > 0 && activeKinds.includes('doc')) {
+    if (docFolders.length > 0) {
+      const docOn = activeKinds.includes('doc');
       const scopeCount = effectiveDocScope(siteUrl).length;
       const folderBtn = el('button', {
         class: 'tdr-source-add',
@@ -1607,7 +1615,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         title: '検索に含める文書フォルダを選択 (登録は設定 → 取り込み)',
       }, [
         el('span', { html: icons.fileText(12) }),
-        el('span', {}, [`文書フォルダ (${scopeCount}/${docFolders.length})`]),
+        el('span', {}, [docOn ? `文書フォルダ (${scopeCount}/${docFolders.length})` : `文書フォルダ (${docFolders.length})`]),
       ]);
       folderBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1667,13 +1675,9 @@ function openSourceAddMenu(anchor: HTMLElement, options: readonly SearchKind[], 
     });
     menu.appendChild(item);
   }
-  // アンカーの真下に出す
+  // アンカー付近に出す (画面下端で見切れる場合は上開き)
   document.body.appendChild(menu);
-  const r = anchor.getBoundingClientRect();
-  menu.style.position = 'fixed';
-  menu.style.left = `${r.left}px`;
-  menu.style.top  = `${r.bottom + 4}px`;
-  menu.style.zIndex = '2147483700';
+  placeMenuNearAnchor(menu, anchor);
   // 外側クリック / Esc で閉じる
   const onDoc = (e: Event): void => {
     if (e.target instanceof Node && menu.contains(e.target)) return;
@@ -1693,6 +1697,27 @@ function openSourceAddMenu(anchor: HTMLElement, options: readonly SearchKind[], 
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
   });
+}
+
+/** ポップアップメニューをアンカー付近に固定配置。画面下端で見切れる場合は上開き、
+ *  右端はみ出しは左へ寄せる。source-row は composer 上端 (画面下寄り) にあるため必須。 */
+function placeMenuNearAnchor(menu: HTMLElement, anchor: HTMLElement): void {
+  const r = anchor.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '2147483700';
+  // 一旦表示してサイズを測る
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  menu.style.visibility = 'hidden';
+  const mh = menu.offsetHeight || 200;
+  const mw = menu.offsetWidth || 240;
+  const vh = window.innerHeight, vw = window.innerWidth;
+  // 下に十分なスペースが無ければアンカーの上に出す
+  const top = (r.bottom + 4 + mh <= vh) ? (r.bottom + 4) : Math.max(8, r.top - mh - 4);
+  const left = Math.min(Math.max(8, r.left), vw - mw - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+  menu.style.visibility = '';
 }
 
 /** 入力ボックス上のモデル切替 (Spira と同じ作法)。社内AI + (開発者モード時) Claude。 */
