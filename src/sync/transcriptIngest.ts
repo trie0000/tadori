@@ -185,13 +185,13 @@ export async function syncTranscriptFolder(
   // 削除検知: SP から消えた .vtt の chunk を除去
   let deletedFiles = 0;
   if (!opts.targetFiles && deleted.length > 0) {
-    const eng = await getEngine(siteUrl);
+    const eng = await getEngine(fallbackSiteUrl);
     for (const fname of deleted) {
       if (signal?.aborted) break;
       onProgress?.({ file: fname, fileIdx: 0, fileTotal: 0, chunkIdx: 0, chunkTotal: 0, phase: 'delete', message: `${fname} は SP から消えていた — chunk を削除` });
       const stale = `${folderServerRel}/${fname}`;
       for (const mid of eng.db.messageIdsForConversation(stale)) {
-        try { await deleteFromSegments(mid, siteUrl); } catch (e) { console.warn('[transcript] delete chunk failed:', mid, (e as Error).message); }
+        try { await deleteFromSegments(mid, fallbackSiteUrl); } catch (e) { console.warn('[transcript] delete chunk failed:', mid, (e as Error).message); }
       }
       deletedFiles++;
     }
@@ -268,17 +268,17 @@ export async function syncTranscriptFolder(
 
       // 既存 chunk のうち新版に無い index を削除 (会議が短くなった場合)
       try {
-        const eng = await getEngine(siteUrl);
+        const eng = await getEngine(fallbackSiteUrl);
         const willHave = new Set(mails.map(m => m.messageId));
         for (const mid of eng.db.messageIdsForConversation(f.serverRelativeUrl)) {
           if (!willHave.has(mid)) {
-            try { await deleteFromSegments(mid, siteUrl); } catch { /* best-effort */ }
+            try { await deleteFromSegments(mid, fallbackSiteUrl); } catch { /* best-effort */ }
           }
         }
       } catch { /* 初回は engine 空 */ }
 
       onProgress?.({ file: f.name, fileIdx, fileTotal, chunkIdx: chunks.length, chunkTotal: chunks.length, phase: 'embed', message: `${f.name} を埋め込み中… (${chunks.length} chunk)` });
-      await ingestToSegments(mails, s, siteUrl, undefined, signal);
+      await ingestToSegments(mails, s, fallbackSiteUrl, undefined, signal);
       ingestedChunks += mails.length;
       ingestedFiles++;
       newPerFile[f.name] = f.timeLastModified;
