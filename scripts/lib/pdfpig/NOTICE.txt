@@ -1,0 +1,22 @@
+PdfPig (UglyToad.PdfPig) — PDF テキスト抽出ライブラリ
+====================================================
+
+ここに含まれる UglyToad.PdfPig*.dll は PdfPig プロジェクトのバイナリです。
+
+  プロジェクト: https://github.com/UglyToad/PdfPig
+  ライセンス:   Apache License 2.0
+  著作権:       Copyright UglyToad / PdfPig contributors
+
+Apache-2.0 ライセンス全文: https://www.apache.org/licenses/LICENSE-2.0
+
+商用利用・改変・再配布いずれも無償で許諾されています (著作権表示の保持が条件)。
+Tadori の relay (tadori-ai-relay.ps1) が PDF のテキスト抽出に使用します。
+Office / Word は不要です。
+
+含まれる DLL:
+  - UglyToad.PdfPig.dll          (本体)
+  - UglyToad.PdfPig.Core.dll
+  - UglyToad.PdfPig.Fonts.dll
+  - UglyToad.PdfPig.Tokenization.dll
+  - UglyToad.PdfPig.Tokens.dll
+(いずれも net471 ターゲット。Windows PowerShell 5.1 / .NET Framework 4.7.1+ で動作)

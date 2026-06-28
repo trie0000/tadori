@@ -84,12 +84,12 @@ function filterDocFiles(items: FileInfo[]): FileInfo[] {
   });
 }
 
-/** ファイルバイト列をブラウザだけでテキスト化。Word/relay 不要。 */
-async function extractText(ext: string, bytes: ArrayBuffer, signal?: AbortSignal): Promise<string> {
+/** ファイルバイト列をテキスト化。docx/xlsx/md/txt はブラウザ、pdf は relay (PdfPig)。 */
+async function extractText(ext: string, bytes: ArrayBuffer, relayBaseUrl: string, fileName: string, signal?: AbortSignal): Promise<string> {
   if (TEXT_EXT.has(ext)) return new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, '');
   if (DOCX_EXT.has(ext)) return docxToText(bytes);
   if (XLSX_EXT.has(ext)) return xlsxToText(bytes);
-  if (PDF_EXT.has(ext)) return pdfToText(bytes, signal);
+  if (PDF_EXT.has(ext)) return pdfToText(bytes, relayBaseUrl, fileName, signal);
   throw new Error(`未対応の形式: ${ext}`);
 }
 
@@ -187,7 +187,7 @@ export async function syncDocFolder(
       onProgress?.({ file: f.name, fileIdx, fileTotal, chunkIdx: 0, chunkTotal: 0, phase: 'parse', message: `${f.name} を解析中…` });
       // すべてブラウザ内でパース (Word/relay 不要)。
       console.log(`[tadori] doc parse: ${f.name} (${(bytes.byteLength / 1024).toFixed(0)} KB, ${e})`);
-      let text = (await extractText(e, bytes, signal)).trim();
+      let text = (await extractText(e, bytes, s.relayBaseUrl, f.name, signal)).trim();
       console.log(`[tadori] doc parsed: ${f.name} → ${text.length} chars`);
       if (!text) {
         onProgress?.({ file: f.name, fileIdx, fileTotal, chunkIdx: 0, chunkTotal: 0, phase: 'skip', message: `${f.name} からテキストを抽出できませんでした` });
