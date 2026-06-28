@@ -1002,10 +1002,16 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         // 失敗時は元クエリそのままで通常検索にフォールバック (queryRouter 内で FALLBACK 処理)。
         const plan = await classifyQuery(q, s, signal, undefined, buildHistory());
         const topK = s.rerankEnabled ? Math.max(s.rerankCandidates, s.ragTopK) : s.ragTopK;
-        // doc を検索対象にしている場合、スコープ選択中のフォルダ serverRelUrl を prefix として渡す。
-        const docPrefixes = activeKinds.includes('doc')
-          ? effectiveDocScope(siteUrl).map(u => toServerRelativeUrl(u))
-          : undefined;
+        // doc を検索対象にしている場合のフォルダスコープ。
+        // 「全フォルダが対象」のときは prefix を渡さない (フィルタ無効化 = 全 doc を検索)。
+        // 部分選択のときだけ prefix で絞る。これで prefix 不一致による全除外事故を防ぐ。
+        let docPrefixes: string[] | undefined;
+        if (activeKinds.includes('doc')) {
+          const allFolders = listDocFolders(siteUrl);
+          const scope = effectiveDocScope(siteUrl);
+          const isAll = scope.length >= allFolders.length;
+          docPrefixes = isAll ? undefined : scope.map(u => toServerRelativeUrl(u));
+        }
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,

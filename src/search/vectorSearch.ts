@@ -107,14 +107,27 @@ export async function searchVectors(
   const must = (opts.mustContain ?? []).filter(k => k.trim().length >= 2).map(k => k.toLowerCase());
   // kind フィルタ (UI のソース選択チップから渡される)
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
-  // doc のフォルダスコープ (serverRelativeUrl 接頭辞、小文字化済み)。undefined なら絞らない。
-  const docPrefixes = opts.docFolderPrefixes
-    ? opts.docFolderPrefixes.map(p => p.replace(/\/+$/, '').toLowerCase())
-    : null;
-  const docInScope = (record: { kind?: string; docServerRelUrl?: string }): boolean => {
+
+  // 診断ログ: DB の種別内訳 / kind フィルタ / doc スコープを 1 回出す。
+  console.log('[tadori] search:',
+    { dbSize: eng.db.size, kinds: eng.db.kindCounts(), kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
+  if ((eng.db.kindCounts().doc ?? 0) > 0) {
+    console.log('[tadori] search: doc サンプル URL =', eng.db.sampleDocUrls(3));
+  }
+  // doc のフォルダスコープ (serverRelativeUrl 接頭辞)。undefined なら絞らない。
+  // URL エンコード差 (%20 vs スペース) を吸収するため decode + 小文字化して比較。
+  const normUrl = (s: string): string => {
+    let v = s.trim().replace(/\/+$/, '');
+    try { v = decodeURIComponent(v); } catch { /* keep */ }
+    return v.toLowerCase();
+  };
+  const docPrefixes = opts.docFolderPrefixes ? opts.docFolderPrefixes.map(normUrl) : null;
+  const docInScope = (record: { kind?: string; docServerRelUrl?: string; conversationId?: string }): boolean => {
     if (record.kind !== 'doc' || docPrefixes == null) return true; // doc 以外 / 絞り込み無しは通す
-    const u = (record.docServerRelUrl || '').toLowerCase();
-    if (!u) return false;
+    // docServerRelUrl が無い古いレコードは conversationId を代用。両方無ければ除外しない (安全側で通す)。
+    const raw = record.docServerRelUrl || record.conversationId || '';
+    if (!raw) return true;
+    const u = normUrl(raw);
     return docPrefixes.some(p => u === p || u.startsWith(p + '/'));
   };
 

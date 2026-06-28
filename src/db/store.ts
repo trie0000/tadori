@@ -91,6 +91,25 @@ export class VectorDb {
     return out;
   }
 
+  /** 種別ごとのレコード数 (診断用)。例: { mail: 1200, doc: 30, pptx: 88 } */
+  kindCounts(): Record<string, number> {
+    const c: Record<string, number> = {};
+    for (const r of this.records.values()) {
+      const k = r.kind ?? 'mail';
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  }
+
+  /** kind='doc' レコードの docServerRelUrl サンプル (診断用、最大 n 件)。 */
+  sampleDocUrls(n = 3): string[] {
+    const out: string[] = [];
+    for (const r of this.records.values()) {
+      if (r.kind === 'doc') { out.push(r.docServerRelUrl || r.conversationId || '(空)'); if (out.length >= n) break; }
+    }
+    return out;
+  }
+
   applySegment(seg: Segment): void {
     const recs = [...seg.records].sort((a, b) => a.seq - b.seq);
     for (const r of recs) this.applyRecord(r);
