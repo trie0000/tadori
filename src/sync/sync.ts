@@ -55,6 +55,23 @@ export class VectorSync {
       return { loadedFromCache: cachedIds.length, downloaded: 0, total: this.db.size };
     }
 
+    // 2.5 診断: フォルダ実体の seg-*.json と manifest 登録分を突合し、孤児を検出。
+    //     (doc の json は書けたが manifest.sealed に登録されていない = 検索に出ない、の切り分け)
+    try {
+      const actual = await this.store.listSegmentIds();
+      const registered = new Set<string>([...manifest.sealed, ...(manifest.open ? [manifest.open.id] : [])]);
+      const orphans = actual.filter(id => !registered.has(id));
+      relayLog(`同期診断: フォルダ実体seg=${actual.length} manifest登録=${registered.size} 孤児=${orphans.length}` +
+        (orphans.length ? ` [${orphans.slice(0, 10).join(', ')}]` : ''));
+      for (const id of orphans.slice(0, 4)) {
+        const seg = await this.store.readSegment(id);
+        if (!seg) { relayLog(`同期診断: 孤児 ${id} 読込失敗`); continue; }
+        const kc: Record<string, number> = {};
+        for (const r of seg.records) { const k = r.kind ?? 'mail'; kc[k] = (kc[k] ?? 0) + 1; }
+        relayLog(`同期診断: 孤児 ${id} records=${seg.records.length} 種別=${JSON.stringify(kc)}`);
+      }
+    } catch (e) { relayLog(`同期診断: 孤児チェック失敗 ${(e as Error).message}`); }
+
     // 3. 差分判定: 未取得の封印セグメント + 変化した open
     const toFetch = missingSealed(manifest, have);
     const prevManifest = await this.cache.getManifest();
