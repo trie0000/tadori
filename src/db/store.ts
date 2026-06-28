@@ -167,14 +167,35 @@ export class VectorDb {
     const qbi = useKw ? bigrams(queryText) : null;
     const w = Math.min(1, Math.max(0, keywordWeight));
 
+    // 診断: kind ごとの「ベクトル次元」分布と、クエリ次元と一致しない (= 類似度 0 に
+    //       沈む) 件数を集計してログ出力する。doc/pdf がヒットしない切り分け用。
+    const dimByKind: Record<string, Record<number, number>> = {};
+    let dimMismatch = 0;
+    const mismatchByKind: Record<string, number> = {};
+
     const scored = recs.map(r => {
+      const k = r.kind ?? 'mail';
+      (dimByKind[k] ??= {})[r.vec.length] = ((dimByKind[k] ??= {})[r.vec.length] ?? 0) + 1;
       let dot = 0;
-      if (r.vec.length === dim) for (let i = 0; i < dim; i++) dot += q[i] * r.vec[i];
+      if (r.vec.length === dim) { for (let i = 0; i < dim; i++) dot += q[i] * r.vec[i]; }
+      else { dimMismatch++; mismatchByKind[k] = (mismatchByKind[k] ?? 0) + 1; }
       const vcos = Math.max(0, dot); // cosine を 0..1 に
       if (!qbi) return { record: r, score: vcos };
       const kcov = keywordCoverage(qbi, this.kwIndex(r));
       return { record: r, score: (1 - w) * vcos + w * kcov };
     });
+
+    console.log('[tadori] db.search 診断:', {
+      queryDim: dim,
+      kindごとの次元分布: dimByKind,
+      次元不一致でベクトル0になった件数: dimMismatch,
+      次元不一致の内訳: mismatchByKind,
+    });
+    if (dimMismatch > 0) {
+      console.warn('[tadori] ★ 一部レコードがクエリと次元不一致 → 類似度 0 で沈みます。' +
+        '設定→AI設定の「次元数」が取り込み当時と違う可能性。該当ソースを強制再取り込みで揃えてください。');
+    }
+
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, topK);
   }
