@@ -21,6 +21,7 @@ import type { RuntimeSettings } from '../api/aiSettings';
 import { updateDocFolderSync, type DocFolderConfig } from './docFolders';
 import { docxToText, xlsxToText } from '../docs/docxText';
 import { pdfToText } from '../docs/pdfText';
+import { relayLog } from '../lib/relayLog';
 
 // すべてブラウザ内でパースする (Word/Excel/relay 不要)。
 //   .md/.txt → TextDecoder
@@ -136,11 +137,14 @@ export async function syncDocFolder(
   const { siteUrl, folderServerRel } = resolveSpFolder(folder.url, fallbackSiteUrl);
   const sp = new SharePointClient(siteUrl);
   console.log('[tadori] doc sync start', { inputUrl: folder.url, siteUrl, folderServerRel });
+  relayLog(`文書取込 開始: 読みサイト=${siteUrl} 書きサイト(Tadori)=${fallbackSiteUrl} フォルダ=${folderServerRel}` +
+    (siteUrl !== fallbackSiteUrl ? ' ★読み書きでサイトが違う(クロスサイト)' : ' (同一サイト)'));
 
   onProgress?.({ file: '', fileIdx: 0, fileTotal: 0, chunkIdx: 0, chunkTotal: 0, phase: 'fetch', message: `フォルダ一覧を取得中… (${folderServerRel})` });
   const items = await sp.listFolderItems(folderServerRel, { recursive: folder.recursive });
   const docFiles = filterDocFiles(items);
   console.log(`[tadori] doc sync: ${items.length} items / ${docFiles.length} doc files`);
+  relayLog(`文書取込: フォルダ内 ${items.length}件 中 対応文書 ${docFiles.length}件 (${docFiles.slice(0, 5).map(f => f.name).join(', ')})`);
   if (docFiles.length === 0) {
     onProgress?.({
       file: '', fileIdx: 0, fileTotal: 0, chunkIdx: 0, chunkTotal: 0, phase: 'skip',
@@ -246,5 +250,11 @@ export async function syncDocFolder(
   }
 
   updateDocFolderSync(fallbackSiteUrl, folder.url, newPerFile);
+  try {
+    const eng = await getEngine(fallbackSiteUrl);
+    relayLog(`文書取込 完了: 取込ファイル=${ingestedFiles} チャンク=${ingestedChunks} ` +
+      `skip=${skipped.length} 削除=${deletedFiles} 失敗=${failedFiles} ` +
+      `→ 書きサイトDB=${eng.db.size} 種別=${JSON.stringify(eng.db.kindCounts())}`);
+  } catch { /* noop */ }
   return { ingestedFiles, ingestedChunks, skippedFiles: skipped.length, deletedFiles, failedFiles };
 }
