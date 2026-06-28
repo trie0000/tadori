@@ -7,6 +7,19 @@ import type { MailRecord } from '../db/store';
 import type { RuntimeSettings } from '../api/aiSettings';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
 
+/** 診断メッセージを relay コンソールに表示させる (ブラウザ Console が読みづらい時用)。
+ *  fire-and-forget。relay 未起動なら黙って無視。 */
+function relayLog(s: RuntimeSettings, msg: string): void {
+  const base = s.relayBaseUrl?.replace(/\/+$/, '');
+  if (!base) return;
+  try {
+    void fetch(`${base}/tadori/log`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg }),
+    }).catch(() => { /* relay 未起動等は無視 */ });
+  } catch { /* noop */ }
+}
+
 export interface MailHit {
   messageId: string;
   internetMessageId: string;
@@ -108,12 +121,15 @@ export async function searchVectors(
   // kind フィルタ (UI のソース選択チップから渡される)
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
 
-  // 診断ログ: DB の種別内訳 / kind フィルタ / doc スコープを 1 回出す。
-  console.log('[tadori] search:',
-    { dbSize: eng.db.size, kinds: eng.db.kindCounts(), kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
-  if ((eng.db.kindCounts().doc ?? 0) > 0) {
-    console.log('[tadori] search: doc サンプル URL =', eng.db.sampleDocUrls(3));
-  }
+  // 診断ログ: DB の種別内訳 / 次元分布 / kind フィルタ / doc スコープを relay へ。
+  const kc = eng.db.kindCounts();
+  const dimk = eng.db.dimByKind();
+  relayLog(s, `検索開始 q="${vecQ.slice(0, 40)}" queryDim=${qvec.length} ` +
+    `DB件数=${eng.db.size} 種別=${JSON.stringify(kc)} ` +
+    `kindFilter=${JSON.stringify(opts.kinds ?? '全部')} ` +
+    `docスコープ=${opts.docFolderPrefixes ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
+    `次元分布=${JSON.stringify(dimk)}`);
+  console.log('[tadori] search:', { dbSize: eng.db.size, kinds: kc, dimByKind: dimk, kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
   // doc のフォルダスコープ (serverRelativeUrl 接頭辞)。undefined なら絞らない。
   // URL エンコード差 (%20 vs スペース) を吸収するため decode + 小文字化して比較。
   const normUrl = (s: string): string => {
@@ -187,6 +203,12 @@ export async function searchVectors(
       pull = Math.min(pull * 2, dbSize);
     }
   }
+
+  // ヒット件数を種別別 + スコア帯で relay へ。
+  const byKind: Record<string, number> = {};
+  for (const { record } of deduped) { const k = record.kind ?? 'mail'; byKind[k] = (byKind[k] ?? 0) + 1; }
+  const top = deduped.slice(0, 5).map(d => `${d.record.kind ?? 'mail'}:${d.score.toFixed(3)}`).join(' ');
+  relayLog(s, `検索ヒット ${deduped.length}件 種別別=${JSON.stringify(byKind)} 上位5=[${top}]`);
 
   return deduped.map(({ record, score }) => toHit(record, score));
 }

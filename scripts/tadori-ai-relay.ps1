@@ -1471,6 +1471,20 @@ function Invoke-RelayRequest {
         return
     }
 
+    # ── ブラウザからの診断ログをこのコンソールに表示する (検索ヒット件数等) ──
+    if ($path -eq '/tadori/log') {
+        try {
+            $reader = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+            $bodyText = $reader.ReadToEnd(); $reader.Close()
+            $p = if ($bodyText) { $bodyText | ConvertFrom-Json } else { $null }
+            $msg = if ($p -and $p.msg) { [string]$p.msg } else { $bodyText }
+            $ts = (Get-Date).ToString('HH:mm:ss')
+            Write-Host ("[{0}] [browser] {1}" -f $ts, $msg) -ForegroundColor Magenta
+        } catch { }
+        Send-Json -Response $response -Status 200 -Body @{ ok = $true }
+        return
+    }
+
     # ── ローカル機能: Outlook からのメールインポート (読み取り専用) ──
     if ($path -eq '/tadori/outlook/import') {
         Invoke-OutlookImport -Context $Context

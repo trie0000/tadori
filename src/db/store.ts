@@ -101,6 +101,17 @@ export class VectorDb {
     return c;
   }
 
+  /** kind ごとのベクトル次元分布 (診断用)。例: { mail: {1024:1200}, doc: {256:30} } */
+  dimByKind(): Record<string, Record<number, number>> {
+    const out: Record<string, Record<number, number>> = {};
+    for (const r of this.records.values()) {
+      const k = r.kind ?? 'mail';
+      (out[k] ??= {});
+      out[k][r.vec.length] = (out[k][r.vec.length] ?? 0) + 1;
+    }
+    return out;
+  }
+
   /** kind='doc' レコードの docServerRelUrl サンプル (診断用、最大 n 件)。 */
   sampleDocUrls(n = 3): string[] {
     const out: string[] = [];
