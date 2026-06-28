@@ -86,6 +86,10 @@ export interface SearchOptions {
    *  undefined または空配列なら絞らない (全 kind を対象)。
    *  ユーザがチャットボックス近くの「+ ソース選択」UI で設定する。 */
   kinds?: Array<'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript'>;
+  /** kind='doc' レコードを、これらの serverRelativeUrl 接頭辞配下のものだけに絞る。
+   *  undefined なら doc のフォルダ絞り込みをしない (全 doc 対象)。
+   *  チャット側の「文書フォルダ」検索スコープ選択から渡される (解決済み serverRelUrl)。 */
+  docFolderPrefixes?: string[];
 }
 
 export async function searchVectors(
@@ -103,6 +107,16 @@ export async function searchVectors(
   const must = (opts.mustContain ?? []).filter(k => k.trim().length >= 2).map(k => k.toLowerCase());
   // kind フィルタ (UI のソース選択チップから渡される)
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
+  // doc のフォルダスコープ (serverRelativeUrl 接頭辞、小文字化済み)。undefined なら絞らない。
+  const docPrefixes = opts.docFolderPrefixes
+    ? opts.docFolderPrefixes.map(p => p.replace(/\/+$/, '').toLowerCase())
+    : null;
+  const docInScope = (record: { kind?: string; docServerRelUrl?: string }): boolean => {
+    if (record.kind !== 'doc' || docPrefixes == null) return true; // doc 以外 / 絞り込み無しは通す
+    const u = (record.docServerRelUrl || '').toLowerCase();
+    if (!u) return false;
+    return docPrefixes.some(p => u === p || u.startsWith(p + '/'));
+  };
 
   // レコードが必須キーワードを「全部」含むかチェック (件名+本文を対象、大文字小文字無視)。
   const containsAll = (record: { subject: string; body: string }): boolean => {
@@ -127,6 +141,7 @@ export async function searchVectors(
     const raw = eng.db.search(qvec, pull, question, s.ragKeywordWeight)
       .filter(({ record }) => !(record.kind === 'onenote' && excluded.has(record.conversationId)))
       .filter(({ record }) => !kindFilter || kindFilter.has(record.kind ?? 'mail'))
+      .filter(({ record }) => docInScope(record))
       .filter(({ record }) => !applyMust || containsAll(record));
     const seenPageIds = new Set<string>();
     const out: ReturnType<typeof eng.db.search> = [];

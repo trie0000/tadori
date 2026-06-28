@@ -23,11 +23,12 @@ import { openOneNotePage, appendOneNotePage, markdownToBlocks, fetchCurrentOneNo
 import { openPptxAtSlide } from '../sync/pptxIngest';
 import { openTranscriptSource } from '../sync/transcriptIngest';
 import { secToMmSs as secToClock } from '../transcript/vtt';
-import { openDocSource, syncDocFolder, type DocIngestProgress } from '../sync/docIngest';
+import { openDocSource } from '../sync/docIngest';
 import {
-  listDocFolders, addDocFolder, removeDocFolder, deriveLabel as deriveDocLabel,
-  type DocFolderConfig,
+  listDocFolders, deriveLabel as deriveDocLabel,
+  getDocSearchScope, setDocSearchScope, effectiveDocScope,
 } from '../sync/docFolders';
+import { toServerRelativeUrl } from '../sharepoint/client';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1001,10 +1002,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         // 失敗時は元クエリそのままで通常検索にフォールバック (queryRouter 内で FALLBACK 処理)。
         const plan = await classifyQuery(q, s, signal, undefined, buildHistory());
         const topK = s.rerankEnabled ? Math.max(s.rerankCandidates, s.ragTopK) : s.ragTopK;
+        // doc を検索対象にしている場合、スコープ選択中のフォルダ serverRelUrl を prefix として渡す。
+        const docPrefixes = activeKinds.includes('doc')
+          ? effectiveDocScope(siteUrl).map(u => toServerRelativeUrl(u))
+          : undefined;
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
           kinds: activeKinds,  // ユーザがチップで選択中のソースだけ検索
+          docFolderPrefixes: docPrefixes,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;
@@ -1317,96 +1323,71 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     root.appendChild(backdrop);
   }
 
-  /** 検索対象の文書フォルダを管理するモーダル (チャット画面から指定)。
-   *  フォルダ URL 登録 + 同期 + 削除。docx/doc/pdf/md/txt を取り込む。
-   *  onChange: フォルダ構成が変わったら呼ぶ (チップ再描画用)。 */
-  function openDocFolderManager(siteUrlArg: string, onChange: () => void): void {
-    const body = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-3);min-width:480px' });
+  /** 検索対象に「含める」文書フォルダを選ぶポップアップ (チェックボックス)。
+   *  フォルダの登録・取り込みは設定側 (buildDocImport) で行う。ここはスコープ選択のみ。
+   *  onChange: スコープが変わったら呼ぶ (チップ再描画用)。 */
+  function openDocFolderScope(siteUrlArg: string, anchor: HTMLElement, onChange: () => void): void {
+    document.querySelectorAll('.tdr-source-menu').forEach(m => m.remove());
+    const folders = listDocFolders(siteUrlArg);
+    const menu = el('div', { class: 'tdr-source-menu', role: 'menu', style: 'min-width:240px;max-width:360px' });
 
-    const hint = el('p', { class: 'tdr-hint', style: 'margin:0' }, [
-      'SharePoint のフォルダを指定して、配下の docx / doc / pdf / md / txt を検索対象に取り込みます。',
-      'docx/doc/pdf は relay (Word COM) で本文抽出します (relay 起動が必要)。md/txt は不要。',
-    ]);
-    const urlInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'https://contoso.sharepoint.com/sites/foo/Shared Documents/資料' }) as HTMLInputElement;
-    const recursiveCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    recursiveCb.checked = true;
-    const recursiveLabel = el('label', { style: 'display:flex;align-items:center;gap:var(--s-2);font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap' }, [recursiveCb, '再帰']);
-    const addBtn = el('button', { class: 'tdr-btn' }, ['追加']);
-    const addRow = el('div', { style: 'display:flex;gap:var(--s-2);align-items:center' }, [urlInput, recursiveLabel, addBtn]);
-    const listEl = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-2)' });
-    const status = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);min-height:1.4em' }, ['']);
+    if (folders.length === 0) {
+      menu.appendChild(el('div', { class: 'tdr-hint', style: 'padding:10px 12px' }, [
+        '取り込み済みの文書フォルダがありません。設定 → 取り込み → 「ドキュメント取り込み」でフォルダを登録してください。',
+      ]));
+    } else {
+      menu.appendChild(el('div', { style: 'padding:8px 12px 4px;font-size:var(--fs-xs);color:var(--ink-4)' }, ['検索に含めるフォルダ:']));
+      // 現在の実効スコープ (未設定なら全部 ON)
+      const scope = getDocSearchScope(siteUrlArg);
+      const inScope = new Set((scope == null ? folders.map(f => f.url) : scope).map(u => u.trim().replace(/\/+$/, '').toLowerCase()));
+      const norm = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
 
-    let ac: AbortController | null = null;
+      const persist = (): void => {
+        const selected = folders.filter(f => inScope.has(norm(f.url))).map(f => f.url);
+        setDocSearchScope(siteUrlArg, selected);
+        onChange();
+      };
 
-    const renderList = (): void => {
-      listEl.replaceChildren();
-      const folders = listDocFolders(siteUrlArg);
-      if (folders.length === 0) {
-        listEl.appendChild(el('div', { class: 'tdr-hint' }, ['まだフォルダが登録されていません。']));
-        return;
-      }
       for (const f of folders) {
-        const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
-        const fileCount = Object.keys(f.perFile).length;
-        const head = el('div', { style: 'font-weight:600;font-size:var(--fs-sm)' }, [f.label || deriveDocLabel(f.url)]);
-        const meta = el('div', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [
-          `${f.url}`, el('br'), `最終同期: ${lastSync} / 文書: ${fileCount} 件`,
-        ]);
-        const syncBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['同期']);
-        const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
-        const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [
-          head, meta, el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, delBtn]),
-        ]);
-        syncBtn.addEventListener('click', () => { void runSync([f], syncBtn); });
-        delBtn.addEventListener('click', () => {
-          removeDocFolder(siteUrlArg, f.url);
-          renderList(); onChange();
-          toast(root, 'フォルダ設定を削除しました', 'ok');
+        const cb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
+        cb.checked = inScope.has(norm(f.url));
+        cb.addEventListener('change', () => {
+          if (cb.checked) inScope.add(norm(f.url)); else inScope.delete(norm(f.url));
+          persist();
         });
-        listEl.appendChild(card);
-      }
-    };
-
-    async function runSync(folders: DocFolderConfig[], btn: HTMLButtonElement): Promise<void> {
-      if (ac) return;
-      ac = new AbortController();
-      btn.disabled = true;
-      const s = loadSettings();
-      let chunks = 0, failed = 0, deleted = 0, skipped = 0;
-      try {
-        for (const f of folders) {
-          if (ac.signal.aborted) break;
-          const r = await syncDocFolder(f, s, siteUrlArg, (p: DocIngestProgress) => {
-            const fl = p.file ? `${p.file} (${p.fileIdx}/${p.fileTotal})` : '一覧取得中';
-            status.textContent = `${fl} — ${p.message ?? p.phase}`;
-          }, ac.signal);
-          chunks += r.ingestedChunks; failed += r.failedFiles; deleted += r.deletedFiles; skipped += r.skippedFiles;
-        }
-        const msg = `完了: ${chunks} チャンク取込 / スキップ ${skipped} / 削除 ${deleted}${failed ? ` / 失敗 ${failed}` : ''}`;
-        status.textContent = msg;
-        toast(root, msg, failed ? 'warn' : 'ok');
-        renderList(); onChange();
-      } catch (e) {
-        if ((e as Error).name === 'AbortError') { status.textContent = '停止しました'; }
-        else { status.textContent = `失敗: ${(e as Error).message}`; toast(root, `取り込み失敗: ${(e as Error).message}`, 'error'); }
-      } finally {
-        ac = null; btn.disabled = false;
+        const fileCount = Object.keys(f.perFile).length;
+        const item = el('label', {
+          class: 'tdr-source-menu-item', style: 'cursor:pointer;align-items:flex-start',
+        }, [
+          cb,
+          el('div', { style: 'display:flex;flex-direction:column;min-width:0' }, [
+            el('span', {}, [f.label || deriveDocLabel(f.url)]),
+            el('span', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [`${fileCount} 件`]),
+          ]),
+        ]);
+        menu.appendChild(item);
       }
     }
 
-    addBtn.addEventListener('click', () => {
-      const url = urlInput.value.trim();
-      if (!url) { toast(root, 'フォルダ URL を入力してください', 'warn'); return; }
-      if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) { toast(root, 'URL は https://... か /sites/... の形式で', 'warn'); return; }
-      addDocFolder(siteUrlArg, { url, recursive: recursiveCb.checked });
-      urlInput.value = '';
-      renderList(); onChange();
-      toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = `${Math.max(8, r.left)}px`;
+    menu.style.top  = `${r.bottom + 4}px`;
+    menu.style.zIndex = '2147483700';
+    const onDoc = (e: Event): void => {
+      if (e.target instanceof Node && menu.contains(e.target)) return;
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+      menu.remove();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); menu.remove(); }
+    };
+    requestAnimationFrame(() => {
+      document.addEventListener('mousedown', onDoc);
+      document.addEventListener('keydown', onKey);
     });
-
-    body.append(hint, addRow, listEl, status);
-    openModal({ root, title: '検索対象の文書フォルダ', body, large: true });
-    renderList();
   }
 
   /** OneNote ページ用ヘッダ (件名/最終更新/ノートブック › セクション/チャンク)。 */
@@ -1615,27 +1596,25 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       });
       sourceRow.appendChild(addBtn);
     }
-    // 文書フォルダ管理ボタン (チャット画面から検索対象フォルダを指定)。
-    const folderBtn = el('button', {
-      class: 'tdr-source-add',
-      'aria-label': '文書フォルダを指定',
-      title: '検索対象の SharePoint フォルダ (docx/doc/pdf/md/txt) を指定',
-    }, [
-      el('span', { html: icons.fileText(12) }),
-      el('span', {}, ['文書フォルダ']),
-    ]);
-    folderBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openDocFolderManager(siteUrl, () => {
-        // フォルダ追加後は doc を検索対象に自動 ON (まだなら)
-        if (!activeKinds.includes('doc')) {
-          activeKinds = ALL_SEARCH_KINDS.filter(x => activeKinds.includes(x) || x === 'doc');
-          setSelectedKinds(activeKinds);
-        }
-        renderSourceRow();
+    // 文書フォルダ スコープ選択ボタン (取り込み済みフォルダのうち検索に含めるものを選ぶ)。
+    // フォルダの登録・取り込みは設定 → 取り込み → ドキュメント取り込み で行う。
+    const docFolders = listDocFolders(siteUrl);
+    if (docFolders.length > 0 && activeKinds.includes('doc')) {
+      const scopeCount = effectiveDocScope(siteUrl).length;
+      const folderBtn = el('button', {
+        class: 'tdr-source-add',
+        'aria-label': '検索する文書フォルダを選択',
+        title: '検索に含める文書フォルダを選択 (登録は設定 → 取り込み)',
+      }, [
+        el('span', { html: icons.fileText(12) }),
+        el('span', {}, [`文書フォルダ (${scopeCount}/${docFolders.length})`]),
+      ]);
+      folderBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDocFolderScope(siteUrl, folderBtn, () => { renderSourceRow(); });
       });
-    });
-    sourceRow.appendChild(folderBtn);
+      sourceRow.appendChild(folderBtn);
+    }
   };
   renderSourceRow();
 
