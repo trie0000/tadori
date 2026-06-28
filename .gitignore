@@ -12,3 +12,4 @@ scripts/*.env
 !*.env.example
 
 # pdf.js worker は build.js が生成 (node_modules から焼き込み)
+dist-test/
