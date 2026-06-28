@@ -24,7 +24,8 @@ try {
     gitDirty = '+';
   }
 } catch { /* not a git repo */ }
-const buildTime = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+// ビルド時刻は JST 表記 (どのビルドが動いているか日本時間で判別できるように)。
+const buildTime = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }) + ' JST';
 const buildId = `${pkg.version}-${gitSha}${gitDirty} (${buildTime})`;
 console.log(`[build] id: ${buildId}`);
 
