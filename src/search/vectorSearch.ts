@@ -6,7 +6,7 @@ import { embedQueryFor } from '../embeddings/router';
 import type { MailRecord } from '../db/store';
 import type { RuntimeSettings } from '../api/aiSettings';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
-import { makeDocInScope } from './docScope';
+import { makeInScope, type SourceScope } from './sourceScope';
 
 /** 診断メッセージを relay コンソールに表示させる (ブラウザ Console が読みづらい時用)。
  *  fire-and-forget。relay 未起動なら黙って無視。 */
@@ -26,6 +26,7 @@ export interface MailHit {
   internetMessageId: string;
   conversationId: string;
   kind: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
+  label?: string;
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -59,6 +60,7 @@ function toHit(record: MailRecord, score: number): MailHit {
     internetMessageId: record.internetMessageId,
     conversationId: record.conversationId,
     kind: record.kind ?? 'mail',
+    label: record.label,
     chunkIdx: record.chunkIdx,
     chunkCount: record.chunkCount,
     docPath: record.docPath,
@@ -100,10 +102,9 @@ export interface SearchOptions {
    *  undefined または空配列なら絞らない (全 kind を対象)。
    *  ユーザがチャットボックス近くの「+ ソース選択」UI で設定する。 */
   kinds?: Array<'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript'>;
-  /** kind='doc' レコードを、これらの serverRelativeUrl 接頭辞配下のものだけに絞る。
-   *  undefined なら doc のフォルダ絞り込みをしない (全 doc 対象)。
-   *  チャット側の「文書フォルダ」検索スコープ選択から渡される (解決済み serverRelUrl)。 */
-  docFolderPrefixes?: string[];
+  /** 種別ごとのサブ項目絞り込み (メール=アドレス / OneNote=ラベル / doc・pptx・会議=フォルダURL)。
+   *  各種別とも空/未指定なら絞り込みなし (その種別は全件)。チャットの「＋」ピッカーで設定。 */
+  scope?: SourceScope;
 }
 
 export async function searchVectors(
@@ -129,11 +130,11 @@ export async function searchVectors(
     `manifest_seg数=${eng.sync.lastStats.manifestSealed} DL数=${eng.sync.lastStats.downloaded} ` +
     `DB件数=${eng.db.size} 種別=${JSON.stringify(kc)} ` +
     `kindFilter=${JSON.stringify(opts.kinds ?? '全部')} ` +
-    `docスコープ=${opts.docFolderPrefixes && opts.docFolderPrefixes.length > 0 ? JSON.stringify(opts.docFolderPrefixes) : '無し(全部)'} ` +
+    `scope=${opts.scope && Object.keys(opts.scope).length > 0 ? JSON.stringify(opts.scope) : '無し(全部)'} ` +
     `次元分布=${JSON.stringify(dimk)}`);
-  console.log('[tadori] search:', { dbSize: eng.db.size, kinds: kc, dimByKind: dimk, kindFilter: opts.kinds, docFolderPrefixes: opts.docFolderPrefixes });
-  // doc のフォルダスコープ判定 (空/未指定なら全通し)。本番もテストもこの同一関数を使う。
-  const docInScope = makeDocInScope(opts.docFolderPrefixes);
+  console.log('[tadori] search:', { dbSize: eng.db.size, kinds: kc, dimByKind: dimk, kindFilter: opts.kinds, scope: opts.scope });
+  // 種別ごとのサブ項目スコープ判定 (各種別とも空/未指定なら全通し)。本番もテストも同一関数。
+  const docInScope = makeInScope(opts.scope);
 
   // レコードが必須キーワードを「全部」含むかチェック (件名+本文を対象、大文字小文字無視)。
   const containsAll = (record: { subject: string; body: string }): boolean => {

@@ -34,6 +34,8 @@ export interface MailRecord {
   internetMessageId: string;
   conversationId: string;
   kind: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
+  /** 取り込みバッチのラベル (OneNote のラベル付きバッチ用)。検索のサブ項目絞り込みに使う。 */
+  label?: string;
   chunkIdx?: number;
   chunkCount?: number;
   docPath?: string;
@@ -157,6 +159,7 @@ export class VectorDb {
         internetMessageId: r.internetMessageId ?? '',
         conversationId: r.conversationId ?? '',
         kind: r.kind ?? 'mail',
+        label: r.label,
         chunkIdx: r.chunkIdx,
         chunkCount: r.chunkCount,
         docPath: r.docPath,

@@ -21,6 +21,9 @@ export interface MakeRecOpts {
   folder?: string;
   dim?: number;
   seqBase?: number;
+  label?: string;
+  to?: string[];
+  cc?: string[];
 }
 
 /** 本番 writer と同じ形の SegmentRecord を作る (emb は decode 可能な実バイト)。 */
@@ -36,11 +39,14 @@ export function makeRecord(o: MakeRecOpts): SegmentRecord {
     messageId: path,
     conversationId: `${folder}/f${o.i}`,
     kind: o.kind,
+    label: o.label,
     chunkIdx: 0,
     chunkCount: 1,
     subject: `${o.kind} ${o.i}`,
     from: 'tester',
-    to: [], cc: [],
+    to: o.to ?? [], cc: o.cc ?? [],
+    pptxServerRelUrl: o.kind === 'pptx' ? `${folder}/f${o.i}.pptx` : undefined,
+    vttServerRelUrl: o.kind === 'transcript' ? `${folder}/f${o.i}.vtt` : undefined,
     date: '2026-01-01T00:00:00Z',
     body: `本文 ${o.kind} ${o.i} キーワード${o.i}`,
     isHtml: false,

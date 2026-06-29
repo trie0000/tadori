@@ -27,6 +27,8 @@ export interface IngestMail {
   conversationId?: string;
   /** ソース種別。省略時は 'mail'。 */
   kind?: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
+  /** 取り込みバッチのラベル (OneNote のラベル付きバッチ用)。 */
+  label?: string;
   /** PPTX 関連メタ (kind='pptx' のときのみ意味を持つ)。検索結果カード/ジャンプで使用。 */
   pptxFile?: string;
   pptxServerRelUrl?: string;
@@ -160,6 +162,7 @@ export async function ingestToSegments(
       internetMessageId: m.internetMessageId,
       conversationId: m.conversationId,
       kind: m.kind,
+      label: m.label,
       chunkIdx: m.chunkIdx,
       chunkCount: m.chunkCount,
       docPath: m.docPath,

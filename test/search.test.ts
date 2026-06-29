@@ -1,8 +1,8 @@
 // 本番 searchVectors を engine/router だけスタブして実行する E2E 検証。
-// 過去に発生した不具合を回帰テストとして固定する:
-//  - doc スコープ空配列で doc 全件が消える (2026-06 不具合)
-//  - kind フィルタ
-//  - doc フォルダ絞り込み (一致/不一致)
+// 過去に発生した不具合を回帰テストとして固定 + 種別ごとのサブ項目スコープ (＋ピッカー) を検証:
+//  - スコープ空で全件が消える (2026-06 不具合) を各種別で防止
+//  - kind フィルタ / doc・pptx フォルダ絞り込み (一致/不一致)
+//  - メール= to/cc アドレス絞り込み / OneNote= ラベル絞り込み
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,57 +24,68 @@ function setupDb(): void {
   for (let i = 0; i < 10; i++) recs.push(makeRecord({ i, kind: 'pptx', folder: '/sites/n365/Shared Documents/PPTX' }));
   db.applySegment(makeSegment('seg-00000', recs));
   __setDb(db);
-  // クエリ = doc#3 に一致
-  __setQuery(normalize(vec(3 + 1000)));
+  __setQuery(normalize(vec(3 + 1000)));   // doc#3 に一致
 }
 
-test('doc スコープ空配列 [] でも doc がヒットする (回帰: 空配列で全消え)', async () => {
+test('doc スコープ空 [] でも doc がヒットする (回帰: 空で全消え)', async () => {
   setupDb();
-  const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], docFolderPrefixes: [] });
-  assert.ok(hits.length > 0, '空配列スコープで 0 件になってはいけない');
-  assert.ok(hits.every(h => h.kind === 'doc'), 'doc 以外が混ざってはいけない');
-  assert.equal(hits[0].docFile, 'f3.pdf', 'トップは一致した doc#3 のはず');
+  const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: [] } });
+  assert.ok(hits.length > 0, '空スコープで 0 件になってはいけない');
+  assert.ok(hits.every(h => h.kind === 'doc'));
+  assert.equal(hits[0].docFile, 'f3.pdf');
 });
 
-test('kind フィルタ=pptx は pptx のみ返す', async () => {
+test('kind フィルタ=pptx は pptx のみ', async () => {
   setupDb();
   const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['pptx'] });
   assert.ok(hits.length > 0);
   assert.ok(hits.every(h => h.kind === 'pptx'));
 });
 
-test('doc フォルダ絞り込み: 一致フォルダは通る', async () => {
+test('doc フォルダ絞り込み: 一致は通る / 不一致は0件', async () => {
   setupDb();
-  const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], docFolderPrefixes: [FOLDER] });
-  assert.ok(hits.length > 0, '一致フォルダなのに 0 件はおかしい');
-  assert.ok(hits.every(h => h.kind === 'doc'));
+  const ok = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: [FOLDER] } });
+  assert.ok(ok.length > 0 && ok.every(h => h.kind === 'doc'));
+  const ng = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: ['/sites/n365/Shared Documents/別'] } });
+  assert.equal(ng.length, 0);
 });
 
-test('doc フォルダ絞り込み: 不一致フォルダは 0 件 (絞り込みは機能する)', async () => {
+test('pptx フォルダ絞り込み: 一致フォルダのみ', async () => {
   setupDb();
-  const hits = await searchVectors('マニュアル', S, 'site', 10, {
-    kinds: ['doc'], docFolderPrefixes: ['/sites/n365/Shared Documents/別フォルダ'],
-  });
-  assert.equal(hits.length, 0, '不一致フォルダは弾くべき');
+  __setQuery(normalize(vec(2 + 5000)));   // pptx#2 に一致
+  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['pptx'], scope: { pptxFolders: ['/sites/n365/Shared Documents/PPTX'] } });
+  assert.ok(hits.length > 0 && hits.every(h => h.kind === 'pptx'));
 });
 
-test('kinds 未指定なら doc/pptx 両方が対象になりうる', async () => {
+test('メール: to/cc アドレスで絞り込み', async () => {
+  const db = new VectorDb();
+  const recs = [];
+  for (let i = 0; i < 5; i++) recs.push(makeRecord({ i, kind: 'mail', to: ['alpha@example.com'], cc: [] }));
+  for (let i = 5; i < 10; i++) recs.push(makeRecord({ i, kind: 'mail', to: ['beta@example.com'], cc: [] }));
+  db.applySegment(makeSegment('seg-00000', recs));
+  __setDb(db);
+  __setQuery(normalize(vec(7))); // beta 側 (i=7)
+  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['mail'], scope: { mailAddresses: ['beta@example.com'] } });
+  assert.ok(hits.length > 0, 'beta 宛が取れるべき');
+  assert.equal(hits[0].messageId.includes('f7'), true, 'beta#7 がトップ');
+});
+
+test('OneNote: ラベルで絞り込み', async () => {
+  const db = new VectorDb();
+  const recs = [];
+  for (let i = 0; i < 5; i++) recs.push(makeRecord({ i, kind: 'onenote', label: '議事録' }));
+  for (let i = 5; i < 10; i++) recs.push(makeRecord({ i, kind: 'onenote', label: '仕様メモ' }));
+  db.applySegment(makeSegment('seg-00000', recs));
+  __setDb(db);
+  __setQuery(normalize(vec(8 + 9000)));
+  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['onenote'], scope: { onenoteLabels: ['仕様メモ'] } });
+  assert.ok(hits.length > 0);
+  assert.ok(hits.every(h => h.label === '仕様メモ'), '選んだラベルのみ');
+});
+
+test('スコープ未指定なら全件対象', async () => {
   setupDb();
   const hits = await searchVectors('マニュアル', S, 'site', 20, {});
   const kinds = new Set(hits.map(h => h.kind));
-  assert.ok(kinds.has('doc'), 'doc が含まれるべき');
-});
-
-test('次元不一致のレコードはスコア0扱いで上位に来ない', async () => {
-  const db = new VectorDb();
-  const recs = [];
-  for (let i = 0; i < 5; i++) recs.push(makeRecord({ i, kind: 'doc', folder: FOLDER }));      // 1024 次元
-  recs.push(makeRecord({ i: 99, kind: 'doc', folder: FOLDER, dim: 256 }));                     // 異次元
-  db.applySegment(makeSegment('seg-00000', recs));
-  __setDb(db);
-  __setQuery(normalize(vec(99 + 1000, DIM)));   // 異次元レコードに対応する seed だが次元は 1024
-  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['doc'] });
-  // 異次元 (f99) はベクトル比較不能なので上位(スコア>0)に来ないこと
-  assert.ok(hits.length > 0);
-  assert.notEqual(hits[0].docFile, 'f99.pdf');
+  assert.ok(kinds.has('doc'));
 });

@@ -1016,7 +1016,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
           kinds: activeKinds,  // ユーザがチップで選択中のソースだけ検索
-          docFolderPrefixes: docPrefixes,
+          scope: docPrefixes ? { docFolders: docPrefixes } : undefined,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;

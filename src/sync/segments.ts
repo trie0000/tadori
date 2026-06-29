@@ -21,6 +21,9 @@ export interface SegmentRecord {
   conversationId?: string;
   /** ソース種別。'mail' (既定) / 'onenote' / 'doc' / 'pptx' / 'transcript'。 */
   kind?: 'mail' | 'onenote' | 'doc' | 'pptx' | 'transcript';
+  /** 取り込みバッチのラベル (主に OneNote のラベル付きバッチ用)。検索のサブ項目絞り込みに使う。
+   *  doc/pptx/transcript は folder URL で絞れるので通常は未設定。 */
+  label?: string;
   /** PPTX 取り込みのメタ (kind='pptx' のときだけ意味を持つ)。 */
   pptxFile?: string;
   pptxServerRelUrl?: string;
