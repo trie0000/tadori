@@ -30,7 +30,8 @@ import { listTranscriptFolders } from '../sync/transcriptFolders';
 import { oneNoteLabels } from '../sync/onenoteSources';
 import { loadSubSel, saveSubSel, buildScope } from '../search/scopeSelection';
 import { loadGlossary, expandQueryTerms } from '../search/glossary';
-import { parseDateRange } from '../search/dateQuery';
+import { parseDateRange, type DateRange } from '../search/dateQuery';
+import { computeFacets } from '../search/facets';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -986,10 +987,22 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     }
   }
 
+  // ファセット絞り込み: チップクリックで「直前の質問」を種別/期間で限定して再検索する。
+  // refineOverride は次の submit で 1 回だけ消費される (一時的な上書き)。
+  let lastQuestion = '';
+  let refineOverride: { kinds?: SearchKind[]; dateRange?: DateRange } | null = null;
+  const refineSearch = (part: { kinds?: SearchKind[]; dateRange?: DateRange }): void => {
+    if (generating || !lastQuestion) return;
+    refineOverride = part;
+    input.value = lastQuestion;
+    void submit();
+  };
+
   async function submit(): Promise<void> {
     if (generating) return;
     const q = input.value.trim();
     if (!q) return;
+    lastQuestion = q;
     input.value = '';
     autosize();
     await converse({
@@ -1011,13 +1024,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         const glossaryTerms = expandQueryTerms(`${q} ${plan.vectorQuery || ''} ${(plan.keywords || []).join(' ')}`, loadGlossary(siteUrl));
         // 「今月の」等の期間表現を解釈して日付フィルタに (無ければ undefined)。
         const dateRange = parseDateRange(q, Date.now()) ?? undefined;
+        // ファセットチップによる一時的な絞り込み (1回だけ消費)。
+        const ov = refineOverride; refineOverride = null;
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
-          kinds,
+          kinds: ov?.kinds ?? kinds,
           scope: Object.keys(scope).length ? scope : undefined,
           glossaryTerms,
-          dateRange,
+          dateRange: ov?.dateRange ?? dateRange,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;
@@ -1518,9 +1533,31 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     container.append(hdr, list);
   }
 
+  /** 根拠の内訳 (種別/時期/差出人) をチップ表示。種別・時期はクリックで絞り込み再検索。 */
+  function buildFacetBar(hits: SavedHit[]): HTMLElement | null {
+    if (hits.length < 2) return null;
+    const f = computeFacets(hits.map(h => ({ kind: h.kind, date: h.date, from: h.from })));
+    const bar = el('div', { class: 'tdr-facets', style: 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:var(--s-2) 0;font-size:var(--fs-xs)' });
+    bar.appendChild(el('span', { style: 'color:var(--ink-4)' }, ['内訳:']));
+    const chip = (text: string, onClick?: () => void): HTMLElement => {
+      const c = el('button', {
+        class: 'tdr-chip', style: 'padding:1px 8px;font-size:var(--fs-xs)' + (onClick ? '' : ';cursor:default;opacity:.8'),
+        title: onClick ? 'クリックで絞り込み再検索' : '',
+      }, [text]);
+      if (onClick) c.addEventListener('click', onClick); else (c as HTMLButtonElement).disabled = false;
+      return c;
+    };
+    if (f.kind.length > 1) for (const b of f.kind) bar.appendChild(chip(`${b.label} ${b.count}`, () => refineSearch({ kinds: [b.key as SearchKind] })));
+    for (const b of f.month.slice(0, 3)) bar.appendChild(chip(`${b.label} ${b.count}`, () => refineSearch({ dateRange: { from: `${b.key}-01`, to: `${b.key}-31` } })));
+    for (const b of f.from.slice(0, 3)) bar.appendChild(chip(`${b.label} ${b.count}`));
+    return bar;
+  }
+
   function appendSources(
     container: HTMLElement, hits: SavedHit[], relayBaseUrl: string, query = '', cited?: Set<number>,
   ): void {
+    const fb = buildFacetBar(hits);
+    if (fb) container.appendChild(fb);
     const all = hits.map((h, i) => ({ h, n: i + 1 }));
     const hasCitedSplit = !!cited && cited.size > 0 && cited.size < hits.length;
     if (hasCitedSplit) {
