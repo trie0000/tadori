@@ -7,6 +7,7 @@ import type { MailRecord } from '../db/store';
 import type { RuntimeSettings } from '../api/aiSettings';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
 import { makeInScope, type SourceScope } from './sourceScope';
+import { inDateRange, type DateRange } from './dateQuery';
 
 /** 診断メッセージを relay コンソールに表示させる (ブラウザ Console が読みづらい時用)。
  *  fire-and-forget。relay 未起動なら黙って無視。 */
@@ -108,6 +109,9 @@ export interface SearchOptions {
   /** 用語辞書によるクエリ展開語 (同義語/略語)。ベクトル用クエリと bigram 用テキスト両方に
    *  畳み込んで、表記違いの取りこぼしを減らす。チャット側で expandQueryTerms から渡す。 */
   glossaryTerms?: string[];
+  /** 日付フィルタ (from..to, 'YYYY-MM-DD')。質問の「今月の」等から解釈して渡す。
+   *  範囲外の dated レコードを除外 (日付不明レコードは通す)。 */
+  dateRange?: DateRange;
 }
 
 export async function searchVectors(
@@ -166,6 +170,7 @@ export async function searchVectors(
     const raw = eng.db.search(qvec, pull, kwText, s.ragKeywordWeight)
       .filter(({ record }) => !(record.kind === 'onenote' && excluded.has(record.conversationId)))
       .filter(({ record }) => !kindFilter || kindFilter.has(record.kind ?? 'mail'))
+      .filter(({ record }) => !opts.dateRange || inDateRange(record.date, opts.dateRange))
       .filter(({ record }) => docInScope(record))
       .filter(({ record }) => !applyMust || containsAll(record));
     const seenPageIds = new Set<string>();

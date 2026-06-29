@@ -30,6 +30,7 @@ import { listTranscriptFolders } from '../sync/transcriptFolders';
 import { oneNoteLabels } from '../sync/onenoteSources';
 import { loadSubSel, saveSubSel, buildScope } from '../search/scopeSelection';
 import { loadGlossary, expandQueryTerms } from '../search/glossary';
+import { parseDateRange } from '../search/dateQuery';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1008,12 +1009,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         const { kinds, scope } = buildScope(siteUrl, activeKinds, loadSubSel(siteUrl));
         // 用語辞書で同義語/略語を展開 (表記違いの取りこぼし対策)。
         const glossaryTerms = expandQueryTerms(`${q} ${plan.vectorQuery || ''} ${(plan.keywords || []).join(' ')}`, loadGlossary(siteUrl));
+        // 「今月の」等の期間表現を解釈して日付フィルタに (無ければ undefined)。
+        const dateRange = parseDateRange(q, Date.now()) ?? undefined;
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
           kinds,
           scope: Object.keys(scope).length ? scope : undefined,
           glossaryTerms,
+          dateRange,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;
