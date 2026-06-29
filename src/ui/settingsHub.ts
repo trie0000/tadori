@@ -13,6 +13,7 @@ import {
   type RuntimeSettings, type Provider,
 } from '../api/aiSettings';
 import { isDeveloperMode, setDeveloperMode, isAutoIngestFlagOn, setAutoIngestFlag } from '../utils/devMode';
+import { type GlossaryEntry, loadGlossary, fetchGlossary, persistGlossary, parseGlossaryTable } from '../search/glossary';
 import {
   getBundleSource, setBundleSource, getLocalBase, setLocalBase,
   getRelayBundleDir, setRelayBundleDir, DEFAULT_LOCAL_BASE, type BundleSource,
@@ -48,7 +49,7 @@ import {
 } from '../search/exclusionRules';
 import { fetchMonthlyTotals, currentUser } from '../usage/tracker';
 
-type SectionId = 'ai' | 'search' | 'exclude' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'paSetup' | 'about' | 'resetMail' | 'resetAll';
+type SectionId = 'ai' | 'search' | 'glossary' | 'exclude' | 'ingest' | 'diag' | 'usage' | 'display' | 'dev' | 'paSetup' | 'about' | 'resetMail' | 'resetAll';
 
 // メニュー構成は固定 (Spira と同じグループ流儀)。むやみに名前を変えないこと。
 const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[] = [
@@ -58,6 +59,7 @@ const NAV_GROUPS: { title: string; items: { id: SectionId; label: string }[] }[]
   { title: 'AI / 自動化', items: [
     { id: 'ai',     label: 'AI 設定' },
     { id: 'search', label: '検索' },
+    { id: 'glossary', label: '用語辞書' },
     { id: 'exclude',label: '除外ルール' },
     { id: 'ingest', label: '取り込み' },
     { id: 'paSetup',label: 'PA セットアップ' },
@@ -98,6 +100,7 @@ export function openSettingsHub(root: HTMLElement, siteUrl: string): void {
     switch (id) {
       case 'ai':      buildAiPane(pane, draft); break;
       case 'search':  buildSearchPane(pane, draft); break;
+      case 'glossary': buildGlossaryPane(pane, root, siteUrl); break;
       case 'exclude': buildExcludePane(pane, root); break;
       case 'ingest':  buildIngestPane(pane, draft, root, siteUrl); break;
       case 'paSetup': buildPaSetupPane(pane, draft, root, siteUrl); break;
@@ -1714,6 +1717,90 @@ function buildUsagePane(pane: HTMLElement, root: HTMLElement): void {
 }
 
 // ─── 開発者 ─────────────────────────────────────────────────────────────────────
+
+/** 用語辞書: 同義語グループを編集 (正式名 | 別名 | 意味)。SP の glossary.json に共有保存。 */
+function buildGlossaryPane(pane: HTMLElement, root: HTMLElement, siteUrl: string): void {
+  paneHead(pane, '用語辞書',
+    '社内用語・略語の同義語を登録すると、検索が表記違いも拾います (例: 「P-WF」で「ワークフロー」もヒット)。意味は任意。SharePoint に保存しチームで共有します。');
+
+  let entries: GlossaryEntry[] = loadGlossary(siteUrl);
+  const tableWrap = el('div', { style: 'margin-top:var(--s-3)' });
+  const status = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-3)' }, ['']);
+
+  const render = (): void => {
+    tableWrap.replaceChildren();
+    const head = el('div', { style: 'display:grid;grid-template-columns:1fr 1.4fr 1.4fr 32px;gap:var(--s-2);font-size:var(--fs-xs);color:var(--ink-4);padding:0 2px var(--s-1)' }, [
+      el('span', {}, ['正式名']), el('span', {}, ['別名 (カンマ区切り)']), el('span', {}, ['意味 (任意)']), el('span', {}, ['']),
+    ]);
+    tableWrap.appendChild(head);
+    if (entries.length === 0) tableWrap.appendChild(el('div', { class: 'tdr-hint', style: 'padding:var(--s-3) 2px' }, ['まだ登録がありません。「行を追加」か Excel から貼り付けで登録してください。']));
+    entries.forEach((e, i) => {
+      const cIn = el('input', { class: 'tdr-input', value: e.canonical }) as HTMLInputElement;
+      const aIn = el('input', { class: 'tdr-input', value: e.aliases.join(', ') }) as HTMLInputElement;
+      const dIn = el('input', { class: 'tdr-input', value: e.def || '' }) as HTMLInputElement;
+      cIn.addEventListener('input', () => { entries[i].canonical = cIn.value.trim(); });
+      aIn.addEventListener('input', () => { entries[i].aliases = aIn.value.split(/[,;、；]/).map(s => s.trim()).filter(Boolean); });
+      dIn.addEventListener('input', () => { entries[i].def = dIn.value.trim() || undefined; });
+      const del = el('button', { class: 'tdr-btn tdr-btn--sm', title: '削除' }, ['×']);
+      del.addEventListener('click', () => { entries.splice(i, 1); render(); });
+      tableWrap.appendChild(el('div', { style: 'display:grid;grid-template-columns:1fr 1.4fr 1.4fr 32px;gap:var(--s-2);margin-bottom:var(--s-2)' }, [cIn, aIn, dIn, del]));
+    });
+  };
+  render();
+
+  const addBtn = el('button', { class: 'tdr-btn' }, ['+ 行を追加']);
+  addBtn.addEventListener('click', () => { entries.push({ canonical: '', aliases: [] }); render(); });
+
+  const saveBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, ['保存 (SPに共有)']);
+  saveBtn.addEventListener('click', () => {
+    saveBtn.disabled = true; status.textContent = '保存中…';
+    void (async () => {
+      try {
+        await persistGlossary(siteUrl, entries);
+        entries = loadGlossary(siteUrl); render();
+        status.textContent = `保存しました (${entries.length} 件)`;
+        toast(root, `用語辞書を保存しました (${entries.length} 件)`, 'ok');
+      } catch (e) {
+        status.textContent = '保存失敗';
+        toast(root, `保存失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      } finally { saveBtn.disabled = false; }
+    })();
+  });
+
+  const reloadBtn = el('button', { class: 'tdr-btn' }, ['SPから再読込']);
+  reloadBtn.addEventListener('click', () => {
+    status.textContent = '読込中…';
+    void (async () => { entries = await fetchGlossary(siteUrl); render(); status.textContent = `読み込みました (${entries.length} 件)`; })();
+  });
+
+  // Excel からの貼り付け (TSV/CSV) 取込。
+  const pasteArea = el('textarea', { class: 'tdr-input', rows: '4', placeholder: 'Excel から貼り付け: 1列目=正式名, 2列目=別名(カンマ区切り), 3列目=意味(任意)', style: 'width:100%;margin-top:var(--s-3)' }) as HTMLTextAreaElement;
+  const importBtn = el('button', { class: 'tdr-btn' }, ['貼り付けから取込 (追記)']);
+  importBtn.addEventListener('click', () => {
+    const add = parseGlossaryTable(pasteArea.value);
+    if (add.length === 0) { toast(root, '取り込める行がありません', 'warn'); return; }
+    // 同じ正式名は上書きマージ
+    for (const a of add) {
+      const idx = entries.findIndex(e => e.canonical && e.canonical === a.canonical);
+      if (idx >= 0) entries[idx] = { ...entries[idx], aliases: [...new Set([...entries[idx].aliases, ...a.aliases])], def: a.def || entries[idx].def };
+      else entries.push(a);
+    }
+    pasteArea.value = ''; render();
+    toast(root, `${add.length} 行を取り込みました (保存で確定)`, 'ok');
+  });
+
+  pane.append(
+    tableWrap,
+    el('div', { style: 'display:flex;gap:var(--s-3);align-items:center;margin-top:var(--s-3)' }, [addBtn, saveBtn, reloadBtn]),
+    el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-6)' }, ['Excel から一括取込']),
+    pasteArea,
+    el('div', { style: 'margin-top:var(--s-2)' }, [importBtn]),
+    status,
+  );
+
+  // 起動キャッシュが古い可能性があるので SP から最新を取り直す。
+  void fetchGlossary(siteUrl).then(fresh => { entries = fresh; render(); }).catch(() => { /* keep cache */ });
+}
 
 function buildDevPane(
   pane: HTMLElement,

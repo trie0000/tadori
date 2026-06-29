@@ -29,6 +29,7 @@ import { listPptxFolders } from '../sync/pptxFolders';
 import { listTranscriptFolders } from '../sync/transcriptFolders';
 import { oneNoteLabels } from '../sync/onenoteSources';
 import { loadSubSel, saveSubSel, buildScope } from '../search/scopeSelection';
+import { loadGlossary, expandQueryTerms } from '../search/glossary';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1005,11 +1006,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         // 「＋」ピッカーで選んだ kind + サブ項目から検索スコープを構築。
         // 各種別ともサブ選択が空なら全件対象 (部分選択のときだけ絞る)。
         const { kinds, scope } = buildScope(siteUrl, activeKinds, loadSubSel(siteUrl));
+        // 用語辞書で同義語/略語を展開 (表記違いの取りこぼし対策)。
+        const glossaryTerms = expandQueryTerms(`${q} ${plan.vectorQuery || ''} ${(plan.keywords || []).join(' ')}`, loadGlossary(siteUrl));
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
           kinds,
           scope: Object.keys(scope).length ? scope : undefined,
+          glossaryTerms,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;

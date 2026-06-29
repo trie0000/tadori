@@ -105,6 +105,9 @@ export interface SearchOptions {
   /** 種別ごとのサブ項目絞り込み (メール=アドレス / OneNote=ラベル / doc・pptx・会議=フォルダURL)。
    *  各種別とも空/未指定なら絞り込みなし (その種別は全件)。チャットの「＋」ピッカーで設定。 */
   scope?: SourceScope;
+  /** 用語辞書によるクエリ展開語 (同義語/略語)。ベクトル用クエリと bigram 用テキスト両方に
+   *  畳み込んで、表記違いの取りこぼしを減らす。チャット側で expandQueryTerms から渡す。 */
+  glossaryTerms?: string[];
 }
 
 export async function searchVectors(
@@ -116,7 +119,11 @@ export async function searchVectors(
 ): Promise<MailHit[]> {
   const eng = await getEngine(siteUrl);
   if (eng.db.size === 0) return [];
-  const vecQ = (opts.vectorQuery || question).trim() || question;
+  // 用語辞書の展開語を、ベクトル用クエリと bigram 用テキスト両方に畳み込む。
+  const extra = (opts.glossaryTerms ?? []).filter(t => t && t.trim().length >= 2);
+  const extraStr = extra.length ? ' ' + extra.join(' ') : '';
+  const vecQ = ((opts.vectorQuery || question).trim() || question) + extraStr;
+  const kwText = question + extraStr;   // db.search の bigram 側に渡す
   const qvec = await embedQueryFor(vecQ, s);
   const excluded = getExcludedOneNotePageIds();
   const must = (opts.mustContain ?? []).filter(k => k.trim().length >= 2).map(k => k.toLowerCase());
@@ -156,7 +163,7 @@ export async function searchVectors(
   let mustHit = 0; // must を満たすレコードが何件取れたか (デバッグ/フォールバック判定用)
 
   const runOnce = (applyMust: boolean): ReturnType<typeof eng.db.search> => {
-    const raw = eng.db.search(qvec, pull, question, s.ragKeywordWeight)
+    const raw = eng.db.search(qvec, pull, kwText, s.ragKeywordWeight)
       .filter(({ record }) => !(record.kind === 'onenote' && excluded.has(record.conversationId)))
       .filter(({ record }) => !kindFilter || kindFilter.has(record.kind ?? 'mail'))
       .filter(({ record }) => docInScope(record))

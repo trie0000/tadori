@@ -12,6 +12,7 @@ import { applyFontSize } from '../utils/fontSize';
 import { getLease, type LeaseStatus } from '../sync/lease';
 import { startAutoIngest } from '../sync/autoIngest';
 import { isAutoIngestEnabled } from '../utils/devMode';
+import { fetchGlossary } from '../search/glossary';
 import { ensureTadoriInboxList } from '../sync/inboxList';
 import {
   getSelectedSiteUrl, setSelectedSiteUrl, detectCurrentSiteUrl,
@@ -122,6 +123,8 @@ export function boot(): void {
     void getLease(siteUrl).start();
     startAutoIngest(siteUrl);
   }
+  // 用語辞書を SP から取得してキャッシュ更新 (検索時は同期でキャッシュを引く)。失敗は無視。
+  void fetchGlossary(siteUrl).catch(() => { /* SP 不達はキャッシュで代替 */ });
   // Tadori 受信メール List (PA からの投入先) が無ければ作る。失敗しても致命にしない。
   void ensureTadoriInboxList(siteUrl, loadSettings().listTitle).catch(e => {
     console.warn('[tadori] Tadori 受信メール List 自動作成失敗:', (e as Error).message);
