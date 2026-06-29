@@ -24,11 +24,11 @@ import { openPptxAtSlide } from '../sync/pptxIngest';
 import { openTranscriptSource } from '../sync/transcriptIngest';
 import { secToMmSs as secToClock } from '../transcript/vtt';
 import { openDocSource } from '../sync/docIngest';
-import {
-  listDocFolders, deriveLabel as deriveDocLabel,
-  getDocSearchScope, setDocSearchScope, effectiveDocScope,
-} from '../sync/docFolders';
-import { toServerRelativeUrl } from '../sharepoint/client';
+import { listDocFolders, deriveLabel as deriveDocLabel } from '../sync/docFolders';
+import { listPptxFolders } from '../sync/pptxFolders';
+import { listTranscriptFolders } from '../sync/transcriptFolders';
+import { oneNoteLabels } from '../sync/onenoteSources';
+import { loadSubSel, saveSubSel, buildScope } from '../search/scopeSelection';
 import { currentUser } from '../usage/tracker';
 import { getEngine } from '../db/engine';
 import { getExcludedOneNotePageIds } from '../onenote/exclude';
@@ -1002,21 +1002,14 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         // 失敗時は元クエリそのままで通常検索にフォールバック (queryRouter 内で FALLBACK 処理)。
         const plan = await classifyQuery(q, s, signal, undefined, buildHistory());
         const topK = s.rerankEnabled ? Math.max(s.rerankCandidates, s.ragTopK) : s.ragTopK;
-        // doc を検索対象にしている場合のフォルダスコープ。
-        // 「全フォルダが対象」のときは prefix を渡さない (フィルタ無効化 = 全 doc を検索)。
-        // 部分選択のときだけ prefix で絞る。これで prefix 不一致による全除外事故を防ぐ。
-        let docPrefixes: string[] | undefined;
-        if (activeKinds.includes('doc')) {
-          const allFolders = listDocFolders(siteUrl);
-          const scope = effectiveDocScope(siteUrl);
-          const isAll = scope.length >= allFolders.length;
-          docPrefixes = isAll ? undefined : scope.map(u => toServerRelativeUrl(u));
-        }
+        // 「＋」ピッカーで選んだ kind + サブ項目から検索スコープを構築。
+        // 各種別ともサブ選択が空なら全件対象 (部分選択のときだけ絞る)。
+        const { kinds, scope } = buildScope(siteUrl, activeKinds, loadSubSel(siteUrl));
         const raw = await searchVectors(q, s, siteUrl, topK, {
           vectorQuery: plan.vectorQuery,
           mustContain: plan.keywords,
-          kinds: activeKinds,  // ユーザがチップで選択中のソースだけ検索
-          scope: docPrefixes ? { docFolders: docPrefixes } : undefined,
+          kinds,
+          scope: Object.keys(scope).length ? scope : undefined,
         });
         const rules = loadRules();
         const afterExclude = rules.length ? raw.filter(h => !matchesAnyRule(h, rules)) : raw;
@@ -1332,57 +1325,71 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   /** 検索対象に「含める」文書フォルダを選ぶポップアップ (チェックボックス)。
    *  フォルダの登録・取り込みは設定側 (buildDocImport) で行う。ここはスコープ選択のみ。
    *  onChange: スコープが変わったら呼ぶ (チップ再描画用)。 */
-  function openDocFolderScope(siteUrlArg: string, anchor: HTMLElement, onChange: () => void): void {
+  // 「＋」ピッカー: 種別 (メール/OneNote/PPTX/会議/文書) と、その小項目 (アドレス/ラベル/フォルダ)
+  // を 1 パネルで選ぶ。種別チェック = 検索対象 ON/OFF。小項目を 1 つでも選ぶとその種別を自動 ON。
+  // 小項目を全部外す = その種別は「全件対象」。
+  function openScopePicker(anchor: HTMLElement, siteUrlArg: string, kinds: SearchKind[], onChange: (kinds: SearchKind[]) => void): void {
     document.querySelectorAll('.tdr-source-menu').forEach(m => m.remove());
-    const folders = listDocFolders(siteUrlArg);
-    const menu = el('div', { class: 'tdr-source-menu', role: 'menu', style: 'min-width:240px;max-width:360px' });
+    let active = [...kinds];
+    const sel = loadSubSel(siteUrlArg);
+    const menu = el('div', { class: 'tdr-source-menu', role: 'menu', style: 'min-width:260px;max-width:380px;max-height:60vh;overflow:auto;padding:var(--s-2) 0' });
 
-    if (folders.length === 0) {
-      menu.appendChild(el('div', { class: 'tdr-hint', style: 'padding:10px 12px' }, [
-        '取り込み済みの文書フォルダがありません。設定 → 取り込み → 「ドキュメント取り込み」でフォルダを登録してください。',
-      ]));
-    } else {
-      menu.appendChild(el('div', { style: 'padding:8px 12px 4px;font-size:var(--fs-xs);color:var(--ink-4)' }, ['検索に含めるフォルダ:']));
-      // 現在の実効スコープ (未設定なら全部 ON)
-      const scope = getDocSearchScope(siteUrlArg);
-      const inScope = new Set((scope == null ? folders.map(f => f.url) : scope).map(u => u.trim().replace(/\/+$/, '').toLowerCase()));
-      const norm = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
-
-      const persist = (): void => {
-        const selected = folders.filter(f => inScope.has(norm(f.url))).map(f => f.url);
-        setDocSearchScope(siteUrlArg, selected);
-        // フォルダを 1 つでも選んだら doc を検索対象に自動 ON。全部外したら doc を OFF。
-        const anySelected = selected.length > 0;
-        if (anySelected && !activeKinds.includes('doc')) {
-          activeKinds = ALL_SEARCH_KINDS.filter(x => activeKinds.includes(x) || x === 'doc');
-          setSelectedKinds(activeKinds);
-        } else if (!anySelected && activeKinds.includes('doc')) {
-          activeKinds = activeKinds.filter(x => x !== 'doc');
-          setSelectedKinds(activeKinds);
-        }
-        onChange();
-      };
-
-      for (const f of folders) {
-        const cb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
-        cb.checked = inScope.has(norm(f.url));
-        cb.addEventListener('change', () => {
-          if (cb.checked) inScope.add(norm(f.url)); else inScope.delete(norm(f.url));
-          persist();
-        });
-        const fileCount = Object.keys(f.perFile).length;
-        const item = el('label', {
-          class: 'tdr-source-menu-item', style: 'cursor:pointer;align-items:flex-start',
-        }, [
-          cb,
-          el('div', { style: 'display:flex;flex-direction:column;min-width:0' }, [
-            el('span', {}, [f.label || deriveDocLabel(f.url)]),
-            el('span', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [`${fileCount} 件`]),
-          ]),
-        ]);
-        menu.appendChild(item);
+    const optsFor = (k: SearchKind): { id: string; label: string }[] => {
+      switch (k) {
+        case 'mail': return (loadSettings().mlAddresses || []).map(a => ({ id: a, label: a }));
+        case 'onenote': return oneNoteLabels(siteUrlArg).map(l => ({ id: l, label: l }));
+        case 'pptx': return listPptxFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
+        case 'transcript': return listTranscriptFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
+        case 'doc': return listDocFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
+        default: return [];
       }
-    }
+    };
+    const setKind = (k: SearchKind, on: boolean): void => {
+      if (on) active = ALL_SEARCH_KINDS.filter(x => active.includes(x) || x === k);
+      else active = active.filter(x => x !== k);
+      setSelectedKinds(active);
+      onChange(active);
+    };
+
+    const render = (): void => {
+      menu.replaceChildren();
+      for (const k of ALL_SEARCH_KINDS) {
+        const on = active.includes(k);
+        const kindCb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
+        kindCb.checked = on;
+        kindCb.addEventListener('change', () => { setKind(k, kindCb.checked); render(); });
+        const head = el('label', {
+          class: 'tdr-source-menu-item', style: 'cursor:pointer;font-weight:600;gap:var(--s-2)',
+        }, [kindCb, el('span', { class: 'ic', html: icons[SEARCH_KIND_ICON[k]](14) }), el('span', {}, [SEARCH_KIND_LABELS[k]])]);
+        menu.appendChild(head);
+
+        const opts = optsFor(k);
+        const sub = sel[k];
+        if (opts.length === 0) {
+          const hint = k === 'mail' ? '(設定 → 取り込み で to/cc を登録)' : '(設定 → 取り込み で登録)';
+          menu.appendChild(el('div', { class: 'tdr-hint', style: 'padding:0 12px 6px 34px;font-size:var(--fs-xs)' }, [hint]));
+          continue;
+        }
+        // 小項目: 全部外す = 全件。チェックでその種別を自動 ON。
+        for (const o of opts) {
+          const cb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
+          cb.checked = sub.includes(o.id);
+          cb.addEventListener('change', () => {
+            const set = new Set(sel[k]);
+            if (cb.checked) { set.add(o.id); if (!active.includes(k)) setKind(k, true); }
+            else set.delete(o.id);
+            sel[k] = [...set];
+            saveSubSel(siteUrlArg, sel);
+            onChange(active);
+            render();
+          });
+          menu.appendChild(el('label', {
+            class: 'tdr-source-menu-item', style: 'cursor:pointer;padding-left:34px;font-size:var(--fs-sm)' + (on ? '' : ';opacity:.5'),
+          }, [cb, el('span', { style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, [o.label])]));
+        }
+      }
+    };
+    render();
 
     document.body.appendChild(menu);
     placeMenuNearAnchor(menu, anchor);
@@ -1555,25 +1562,25 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   // デフォルト: 全 kind が対象。ユーザが × で外すと該当 kind を除外、+ で再追加。
   let activeKinds: SearchKind[] = getSelectedKinds();
   const sourceRow = el('div', { class: 'tdr-source-row', 'aria-label': '検索対象のソース' });
+  const subKey = { mail: 'mail', onenote: 'onenote', pptx: 'pptx', transcript: 'transcript', doc: 'doc' } as const;
   const renderSourceRow = (): void => {
     sourceRow.replaceChildren();
     sourceRow.appendChild(el('span', { class: 'tdr-source-label' }, ['検索対象:']));
     if (activeKinds.length === 0) {
-      sourceRow.appendChild(el('span', { class: 'tdr-source-empty' }, [
-        '(検索対象なし — 質問しても 0 件)',
-      ]));
+      sourceRow.appendChild(el('span', { class: 'tdr-source-empty' }, ['(なし — 「＋」で選択)']));
     } else {
+      const sel = loadSubSel(siteUrl);
       for (const k of activeKinds) {
         const iconKey = SEARCH_KIND_ICON[k];
-        const chip = el('span', { class: `tdr-source-chip tdr-source-chip--${k}` }, [
+        const subCount = sel[subKey[k]].length;
+        const lbl = subCount > 0 ? `${SEARCH_KIND_LABELS[k]} (${subCount})` : SEARCH_KIND_LABELS[k];
+        const chip = el('span', { class: `tdr-source-chip tdr-source-chip--${k}`, title: subCount > 0 ? '一部のみ対象 (「＋」で変更)' : '全件対象' }, [
           el('span', { class: 'ic', html: icons[iconKey](12) }),
-          el('span', { class: 'lbl' }, [SEARCH_KIND_LABELS[k]]),
+          el('span', { class: 'lbl' }, [lbl]),
         ]);
         const rm = el('button', {
-          class: 'tdr-source-x',
-          'aria-label': `${SEARCH_KIND_LABELS[k]} を検索対象から外す`,
-          title: '検索対象から外す',
-          html: icons.close(10),
+          class: 'tdr-source-x', 'aria-label': `${SEARCH_KIND_LABELS[k]} を検索対象から外す`,
+          title: '検索対象から外す', html: icons.close(10),
         });
         rm.addEventListener('click', () => {
           activeKinds = activeKinds.filter(x => x !== k);
@@ -1584,51 +1591,15 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
         sourceRow.appendChild(chip);
       }
     }
-    // 未追加の kind があれば「+ ソース追加」ボタンを表示。
-    // doc は「文書フォルダ」ボタン経由で扱うので、汎用追加メニューには出さない。
-    const inactive = ALL_SEARCH_KINDS.filter(k => !activeKinds.includes(k) && k !== 'doc');
-    if (inactive.length > 0) {
-      const addBtn = el('button', {
-        class: 'tdr-source-add',
-        'aria-label': '検索対象を追加',
-        title: '検索対象に追加',
-      }, [
-        el('span', { html: icons.plus(12) }),
-        el('span', {}, ['追加']),
-      ]);
-      addBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openSourceAddMenu(addBtn, inactive, (k) => {
-          if (activeKinds.includes(k)) return;
-          // ALL_SEARCH_KINDS の順序を保って挿入 (mail → onenote → pptx)
-          activeKinds = ALL_SEARCH_KINDS.filter(x => activeKinds.includes(x) || x === k);
-          setSelectedKinds(activeKinds);
-          renderSourceRow();
-        });
-      });
-      sourceRow.appendChild(addBtn);
-    }
-    // 文書フォルダ スコープ選択ボタン (取り込み済みフォルダのうち検索に含めるものを選ぶ)。
-    // フォルダ登録があれば doc が未選択でも表示し、フォルダを選ぶと doc を自動 ON にする。
-    // フォルダの登録・取り込みは設定 → 取り込み → ドキュメント取り込み で行う。
-    const docFolders = listDocFolders(siteUrl);
-    if (docFolders.length > 0) {
-      const docOn = activeKinds.includes('doc');
-      const scopeCount = effectiveDocScope(siteUrl).length;
-      const folderBtn = el('button', {
-        class: 'tdr-source-add',
-        'aria-label': '検索する文書フォルダを選択',
-        title: '検索に含める文書フォルダを選択 (登録は設定 → 取り込み)',
-      }, [
-        el('span', { html: icons.fileText(12) }),
-        el('span', {}, [docOn ? `文書フォルダ (${scopeCount}/${docFolders.length})` : `文書フォルダ (${docFolders.length})`]),
-      ]);
-      folderBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openDocFolderScope(siteUrl, folderBtn, () => { renderSourceRow(); });
-      });
-      sourceRow.appendChild(folderBtn);
-    }
+    // 単一の「＋」ボタン → 種別 + サブ項目のピッカー。
+    const addBtn = el('button', {
+      class: 'tdr-source-add', 'aria-label': '検索対象を選択', title: '検索対象 (種別・ラベル・アドレス) を選択',
+    }, [el('span', { html: icons.plus(12) }), el('span', {}, ['検索対象'])]);
+    addBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openScopePicker(addBtn, siteUrl, activeKinds, (kinds) => { activeKinds = kinds; renderSourceRow(); });
+    });
+    sourceRow.appendChild(addBtn);
   };
   renderSourceRow();
 
@@ -1661,48 +1632,6 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   ]);
 
   return el('div', { class: 'tdr-main' }, [sidebar, divider, chatCol]);
-}
-
-/** 「+ 追加」ボタンの隣に表示する小さなメニュー (未追加 kind を 1 件選んで callback)。 */
-function openSourceAddMenu(anchor: HTMLElement, options: readonly SearchKind[], pick: (k: SearchKind) => void): void {
-  // 既存のメニューがあれば閉じる (二重起動防止)
-  document.querySelectorAll('.tdr-source-menu').forEach(m => m.remove());
-  const menu = el('div', { class: 'tdr-source-menu', role: 'menu' });
-  for (const k of options) {
-    const iconKey = SEARCH_KIND_ICON[k];
-    const item = el('button', { class: 'tdr-source-menu-item', role: 'menuitem' }, [
-      el('span', { class: 'ic', html: icons[iconKey](14) }),
-      el('span', {}, [SEARCH_KIND_LABELS[k]]),
-    ]);
-    item.addEventListener('click', (e) => {
-      e.stopPropagation();
-      menu.remove();
-      pick(k);
-    });
-    menu.appendChild(item);
-  }
-  // アンカー付近に出す (画面下端で見切れる場合は上開き)
-  document.body.appendChild(menu);
-  placeMenuNearAnchor(menu, anchor);
-  // 外側クリック / Esc で閉じる
-  const onDoc = (e: Event): void => {
-    if (e.target instanceof Node && menu.contains(e.target)) return;
-    document.removeEventListener('mousedown', onDoc);
-    document.removeEventListener('keydown', onKey);
-    menu.remove();
-  };
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-      menu.remove();
-    }
-  };
-  // 同期で追加するとアンカーの click イベントで即閉じるので、次フレームで登録
-  requestAnimationFrame(() => {
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-  });
 }
 
 /** ポップアップメニューをアンカー付近に固定配置。画面下端で見切れる場合は上開き、

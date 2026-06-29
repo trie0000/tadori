@@ -14,7 +14,10 @@
 
 export interface SourceScope {
   mailAddresses?: string[];
-  onenoteLabels?: string[];
+  /** OneNote の対象ページ ID 群 (record.conversationId と照合)。ラベル→pageIds は
+   *  チャット側がバッチ設定から解決して渡す。レコードへの label 付与に依存しないので
+   *  既存取り込み済みページも再取り込み不要で絞れる。 */
+  onenotePageIds?: string[];
   docFolders?: string[];
   pptxFolders?: string[];
   transcriptFolders?: string[];
@@ -52,7 +55,8 @@ function prefixMatch(raw: string | undefined, fallback: string | undefined, pref
 /** scope に基づき「このレコードが検索対象か」を返す述語。種別未選択は全通し。 */
 export function makeInScope(scope?: SourceScope): (r: ScopeRecord) => boolean {
   const mail = nonEmpty(scope?.mailAddresses)?.map(a => a.trim().toLowerCase());
-  const note = nonEmpty(scope?.onenoteLabels);
+  const note = nonEmpty(scope?.onenotePageIds);
+  const noteSet = note ? new Set(note) : null;
   const docs = nonEmpty(scope?.docFolders);
   const ppts = nonEmpty(scope?.pptxFolders);
   const trns = nonEmpty(scope?.transcriptFolders);
@@ -65,8 +69,8 @@ export function makeInScope(scope?: SourceScope): (r: ScopeRecord) => boolean {
         return addrs.some(a => mail.some(sel => a.includes(sel)));
       }
       case 'onenote':
-        if (!note) return true;
-        return r.label != null && note.includes(r.label);
+        if (!noteSet) return true;
+        return r.conversationId != null && noteSet.has(r.conversationId);
       case 'doc':
         if (!docs) return true;
         return prefixMatch(r.docServerRelUrl, r.conversationId, docs);

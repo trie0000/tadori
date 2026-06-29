@@ -21,6 +21,7 @@ import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { fetchOneNoteHierarchy, fetchOneNotePages, pagesToIngestMails, type OneNoteNotebook } from '../onenote/import';
+import { recordOneNoteBatch, removeOneNoteBatch, listOneNoteBatches } from '../sync/onenoteSources';
 import { getExcludedOneNotePageIds, setExcludedOneNotePageIds } from '../onenote/exclude';
 import { ingestToSegments } from '../db/writer';
 import {
@@ -564,6 +565,11 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
 
   const loadBtn  = el('button', { class: 'tdr-btn' }, [el('span', { html: icons.notebook(14) }), 'ノートブック一覧を取得']);
   const treeEl   = el('div', { class: 'tdr-onenote-tree', style: 'max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-4);margin-top:var(--s-3);display:none;' });
+  // ラベル: 選択ページをこのラベルの取り込みバッチとして束ねる (チャットのソース絞り込み単位)。
+  const labelInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'ラベル (例: 開発マニュアル) — チャットの検索対象選択で使う', style: 'margin-top:var(--s-4);display:none;width:100%' }) as HTMLInputElement;
+  const labelList  = el('datalist', { id: 'tdr-onenote-labels' });
+  labelInput.setAttribute('list', 'tdr-onenote-labels');
+  const batchesEl  = el('div', { style: 'margin-top:var(--s-3)' });
   const runBtn   = el('button', { class: 'tdr-btn tdr-btn--primary', style: 'margin-top:var(--s-4);display:none' }, ['選択内容を適用']);
   const stopBtn  = el('button', { class: 'tdr-btn', style: 'margin-top:var(--s-4);display:none' }, ['停止']);
   const status   = el('div', { style: 'font-size:var(--fs-sm);color:var(--ink-3);margin-top:var(--s-3)' }, ['']);
@@ -634,6 +640,29 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
     }
   }
 
+  function renderBatches(): void {
+    const batches = listOneNoteBatches(siteUrl);
+    labelList.replaceChildren(...batches.map(b => el('option', { value: b.label })));
+    batchesEl.replaceChildren();
+    if (batches.length === 0) return;
+    batchesEl.appendChild(el('div', { class: 'tdr-hint', style: 'margin-bottom:var(--s-2)' }, ['取り込み済みラベル (チャットの検索対象選択に表示):']));
+    for (const b of batches) {
+      const del = el('button', { class: 'tdr-btn tdr-btn--sm' }, ['削除']);
+      del.addEventListener('click', () => {
+        removeOneNoteBatch(siteUrl, b.label);
+        renderBatches();
+        toast(root, `ラベル「${b.label}」を削除 (ベクトルは残ります)`, 'ok');
+      });
+      batchesEl.appendChild(el('div', {
+        style: 'display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) 0;border-bottom:1px solid var(--line)',
+      }, [
+        el('span', { class: 'tdr-pill', style: 'background:var(--accent-soft);color:var(--accent-strong);padding:1px 8px;border-radius:var(--r-1)' }, [b.label]),
+        el('span', { class: 'tdr-hint', style: 'flex:1' }, [`${b.pageIds.length} ページ`]),
+        del,
+      ]));
+    }
+  }
+
   loadBtn.addEventListener('click', () => {
     void (async () => {
       loadBtn.disabled = true; status.textContent = 'OneNote の階層を取得中…';
@@ -648,8 +677,9 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
         const total = notebooks.reduce((n, nb) => n + nb.sections.reduce((m, s) => m + s.pages.length, 0), 0);
         const checkedNow = total === 0 ? 0 : (importedIds.size - [...importedIds].filter(id => excludedIds.has(id)).length);
         status.textContent = `${notebooks.length} ノートブック / ${total} ページ。取り込み済み ${importedIds.size} 件 (うち除外中 ${excludedIds.size} 件 / 検索対象 ${checkedNow} 件)。チェックの増減で「取り込み/除外」をまとめて適用します。`;
-        treeEl.style.display = ''; runBtn.style.display = '';
+        treeEl.style.display = ''; runBtn.style.display = ''; labelInput.style.display = '';
         renderTree();
+        renderBatches();
       } catch (e) {
         status.textContent = `失敗: ${e instanceof Error ? e.message : String(e)}`;
       } finally { loadBtn.disabled = false; }
@@ -658,6 +688,8 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
 
   runBtn.addEventListener('click', () => {
     const checked = new Set(selectedPageIds());
+    const checkedAll = [...checked];
+    const label = labelInput.value.trim();
     const newImports: string[] = [];
     const newlyExcluded: string[] = [];
     const reincluded: string[] = [];
@@ -670,22 +702,36 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       else if (isChecked && isImported && excludedIds.has(pg.id)) reincluded.push(pg.id);
     }
     if (newImports.length === 0 && newlyExcluded.length === 0 && reincluded.length === 0) {
-      toast(root, '変更なし', 'warn'); return;
+      // 取り込み/除外の変更は無いが、ラベルが指定されていれば「選択ページをそのラベルに束ねる」
+      // だけは実行する (既存取り込み済みページへのラベル付けはこの経路)。
+      if (label && checkedAll.length) {
+        recordOneNoteBatch(siteUrl, label, checkedAll);
+        renderBatches();
+        toast(root, `ラベル「${label}」に ${checkedAll.length} ページを登録`, 'ok');
+      } else {
+        toast(root, '変更なし', 'warn');
+      }
+      return;
     }
     const lines: string[] = [];
     if (newImports.length)   lines.push(`新規取り込み: ${newImports.length} ページ`);
     if (newlyExcluded.length) lines.push(`検索対象から除外: ${newlyExcluded.length} ページ`);
     if (reincluded.length)   lines.push(`検索対象に再有効化: ${reincluded.length} ページ`);
+    if (label) lines.push(`ラベル「${label}」`);
     confirmModal({
       root, title: 'OneNote 取り込み適用', primaryLabel: '適用',
       message: lines.join(' / ') + '。長文ページは自動でチャンク分割されます。',
-      onConfirm: () => { void doApply(newImports, newlyExcluded, reincluded); },
+      onConfirm: () => { void doApply(newImports, newlyExcluded, reincluded, label, checkedAll); },
     });
   });
 
   stopBtn.addEventListener('click', () => { ac?.abort(); stopBtn.textContent = '停止中…'; });
 
-  async function doApply(newImports: string[], newlyExcluded: string[], reincluded: string[]): Promise<void> {
+  async function doApply(newImports: string[], newlyExcluded: string[], reincluded: string[], label = '', checkedAll: string[] = []): Promise<void> {
+    // ラベル指定があれば、選択ページ全体 (既存取り込み済み含む) をそのラベルに束ねる。
+    // 検索は conversationId(=pageId) で照合するので、ここで pageIds を記録すれば
+    // 既存ページも再取り込み不要でラベル絞り込みできる。
+    if (label && checkedAll.length) { recordOneNoteBatch(siteUrl, label, checkedAll); }
     ac = new AbortController();
     const signal = ac.signal;
     runBtn.disabled = true;
@@ -715,7 +761,7 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
         if (pages.length === 0) {
           status.textContent = '取得できたページがありませんでした';
         } else {
-          const mails = pagesToIngestMails(pages);
+          const mails = pagesToIngestMails(pages, label || undefined);
           const skipped = newImports.length - pages.length;
           const skipNote = skipped > 0 ? ` (取得失敗 ${skipped} ページはスキップ)` : '';
           status.textContent = `${pages.length} ページ → ${mails.length} チャンク${skipNote}。埋め込みを開始…`;
@@ -758,9 +804,11 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
     }
     ac = null; runBtn.disabled = false;
     renderTree(); // チェック状態を新しい importedIds / excludedIds で再描画
+    renderBatches();
+    if (label && checkedAll.length) toast(root, `ラベル「${label}」に ${checkedAll.length} ページを登録`, 'ok');
   }
 
-  pane.append(loadBtn, treeEl, el('div', { style: 'display:flex;gap:var(--s-3);align-items:center' }, [runBtn, stopBtn]), bar, status);
+  pane.append(loadBtn, treeEl, labelInput, labelList, el('div', { style: 'display:flex;gap:var(--s-3);align-items:center' }, [runBtn, stopBtn]), bar, status, batchesEl);
 }
 
 /** PPTX マニュアル取り込み: SP ドキュメントライブラリのフォルダ URL を指定して、配下の

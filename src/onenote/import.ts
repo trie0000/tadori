@@ -87,8 +87,9 @@ export async function fetchOneNotePages(
   return out;
 }
 
-/** OneNote ページ群をチャンク化して IngestMail 配列に変換 (既存パイプラインに流す)。 */
-export function pagesToIngestMails(pages: OneNotePage[]): IngestMail[] {
+/** OneNote ページ群をチャンク化して IngestMail 配列に変換 (既存パイプラインに流す)。
+ *  label を渡すと各レコードに付与され、検索のサブ項目 (ラベル) 絞り込みに使える。 */
+export function pagesToIngestMails(pages: OneNotePage[], label?: string): IngestMail[] {
   const out: IngestMail[] = [];
   for (const p of pages) {
     const docPath = `onenote://${p.notebook}/${p.section}/${p.title}`;
@@ -100,6 +101,7 @@ export function pagesToIngestMails(pages: OneNotePage[]): IngestMail[] {
         internetMessageId: '',
         conversationId: p.pageId,   // 親ドキュメント = ページ ID
         kind: 'onenote',
+        label,
         chunkIdx: i,
         chunkCount: chunks.length,
         docPath,

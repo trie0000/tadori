@@ -70,7 +70,8 @@ test('メール: to/cc アドレスで絞り込み', async () => {
   assert.equal(hits[0].messageId.includes('f7'), true, 'beta#7 がトップ');
 });
 
-test('OneNote: ラベルで絞り込み', async () => {
+test('OneNote: ラベル(pageId 集合)で絞り込み', async () => {
+  const F = '/sites/x/Shared Documents/F';
   const db = new VectorDb();
   const recs = [];
   for (let i = 0; i < 5; i++) recs.push(makeRecord({ i, kind: 'onenote', label: '議事録' }));
@@ -78,9 +79,11 @@ test('OneNote: ラベルで絞り込み', async () => {
   db.applySegment(makeSegment('seg-00000', recs));
   __setDb(db);
   __setQuery(normalize(vec(8 + 9000)));
-  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['onenote'], scope: { onenoteLabels: ['仕様メモ'] } });
+  // 「仕様メモ」ラベル = pageId(conversationId) i=5..9。チャット側がバッチ設定から解決する想定。
+  const specPageIds = [5, 6, 7, 8, 9].map(i => `${F}/f${i}`);
+  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['onenote'], scope: { onenotePageIds: specPageIds } });
   assert.ok(hits.length > 0);
-  assert.ok(hits.every(h => h.label === '仕様メモ'), '選んだラベルのみ');
+  assert.ok(hits.every(h => specPageIds.includes(h.conversationId)), '選んだラベルのページのみ');
 });
 
 test('スコープ未指定なら全件対象', async () => {
