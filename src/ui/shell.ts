@@ -11,6 +11,7 @@ import { initUsage } from '../usage/tracker';
 import { applyFontSize } from '../utils/fontSize';
 import { getLease, type LeaseStatus } from '../sync/lease';
 import { startAutoIngest } from '../sync/autoIngest';
+import { isAutoIngestEnabled } from '../utils/devMode';
 import { ensureTadoriInboxList } from '../sync/inboxList';
 import {
   getSelectedSiteUrl, setSelectedSiteUrl, detectCurrentSiteUrl,
@@ -113,12 +114,14 @@ export function boot(): void {
   document.body.appendChild(root);
   applyFontSize();
 
-  // ハートビート + 自動取り込み (Sticky モード) を起動。
-  // - lease.start() で 30 秒毎に Tadori Sync List をハートビート / リース更新
-  // - autoIngest が writer 状態変化を購読し、自分が writer になったら新着メールを取り込み
+  // 自動取り込み (Sticky モード) はベータ機能。開発者モード かつ ベータフラグ ON のときだけ起動。
+  // 既定 (OFF) では常駐の自動取り込みは一切走らず、取り込みは「設定→取り込み」の明示同期のみ。
+  // - 有効時: lease.start() で 30 秒毎にハートビート / リース更新し、writer になったら新着を取り込み
   // - relay 未起動なら autoIngest は silently スキップ (実害なし)
-  void getLease(siteUrl).start();
-  startAutoIngest(siteUrl);
+  if (isAutoIngestEnabled()) {
+    void getLease(siteUrl).start();
+    startAutoIngest(siteUrl);
+  }
   // Tadori 受信メール List (PA からの投入先) が無ければ作る。失敗しても致命にしない。
   void ensureTadoriInboxList(siteUrl, loadSettings().listTitle).catch(e => {
     console.warn('[tadori] Tadori 受信メール List 自動作成失敗:', (e as Error).message);

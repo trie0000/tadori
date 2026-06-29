@@ -12,7 +12,7 @@ import {
   CORP_AI_MODELS, CLAUDE_MODELS, EMBEDDING_MODELS,
   type RuntimeSettings, type Provider,
 } from '../api/aiSettings';
-import { isDeveloperMode, setDeveloperMode } from '../utils/devMode';
+import { isDeveloperMode, setDeveloperMode, isAutoIngestFlagOn, setAutoIngestFlag } from '../utils/devMode';
 import {
   getBundleSource, setBundleSource, getLocalBase, setLocalBase,
   getRelayBundleDir, setRelayBundleDir, DEFAULT_LOCAL_BASE, type BundleSource,
@@ -1736,6 +1736,23 @@ function buildDevPane(
 
   pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-3)' }, [
     '※ 端末ローカル (localStorage) に保存。AI 接続で Claude を選べるようになります。',
+  ]));
+
+  // ベータ: ブラウザ常駐の自動取り込み (既定 OFF)。開発者モードのこのセクションでのみ操作可。
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-7)' }, ['ベータ機能']));
+  const autoCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  autoCb.checked = isAutoIngestFlagOn();
+  autoCb.addEventListener('change', () => {
+    setAutoIngestFlag(autoCb.checked);
+    toast(root, autoCb.checked ? '自動取り込み ON (次回リロードで有効)' : '自動取り込み OFF (次回リロードで停止)', 'ok');
+  });
+  pane.appendChild(el('label', {
+    style: 'display:inline-flex;align-items:center;gap:var(--s-3);cursor:pointer;padding:var(--s-3);background:var(--paper-2);border-radius:var(--r-2)',
+  }, [autoCb, el('span', { style: 'font-size:var(--fs-md)' }, ['自動取り込み（常駐・ベータ）を有効にする'])]));
+  pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-3)' }, [
+    '既定は OFF。OFF のときは「設定 → 取り込み」での明示同期だけが取り込み手段です。',
+    'ON にすると、ハートビートで書き込み担当になったブラウザが新着を自動取り込みします (実験的)。',
+    '※ 開発者モードを切ると自動で無効になります。変更は次回リロードで反映。',
   ]));
 
   // テストデータ投入
