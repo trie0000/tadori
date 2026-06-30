@@ -1289,11 +1289,12 @@ function buildTranscriptImport(pane: HTMLElement, draft: RuntimeSettings, root: 
 /** ドキュメント (docx/doc/pdf/md/txt) 取り込み。設定側でフォルダを登録・同期する。
  *  検索対象に「含めるか」はチャット画面の「文書フォルダ」スコープ選択で切替。 */
 function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElement, siteUrl: string): void {
-  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['ドキュメント取り込み']));
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['フォルダ取り込み']));
   pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-4)' }, [
-    'SharePoint のフォルダを指定して、配下の docx / doc / pdf / md / txt を取り込みます。',
-    'docx/doc/pdf は relay (Word COM) で本文抽出 (relay 起動が必要)。md/txt は relay 不要。',
-    '※ ここでは「取り込む」フォルダを管理します。検索で「どのフォルダを含めるか」はチャット画面の「文書フォルダ」ボタンで切替えます。',
+    'SharePoint のフォルダを指定して、配下の pptx / pdf / docx / xlsx / md / txt を種別問わずまとめて取り込みます。',
+    'pdf/docx は relay で本文抽出 (relay 起動が必要)。md/txt は relay 不要。',
+    'pptx は「Vision 解析」ONで画像も含めて解説化、OFFでテキスト/表/ノートのみ取り込み (ラベル=フォルダ単位で指定)。',
+    '※ 検索対象はチャットの「＋ 検索対象」で文書/PPTX のフォルダ(ラベル)から選べます。',
   ]));
 
   const urlInput = el('input', { type: 'text', class: 'tdr-input', placeholder: 'https://contoso.sharepoint.com/sites/foo/Shared Documents/資料' }) as HTMLInputElement;
@@ -1303,8 +1304,10 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
   const recursiveCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
   recursiveCb.checked = true;
   const recursiveLabel = el('label', { style: 'display:flex;align-items:center;gap:var(--s-2);font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap' }, [recursiveCb, '再帰']);
+  const visionCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const visionLabel = el('label', { style: 'display:flex;align-items:center;gap:var(--s-2);font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap', title: 'pptx を画像込みで Vision 解析 (OFF=テキストのみ)' }, [visionCb, 'pptx Vision']);
   const addBtn = el('button', { class: 'tdr-btn' }, ['追加']);
-  const addRow = el('div', { style: 'display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-2)' }, [urlInput, labelInput, recursiveLabel, addBtn]);
+  const addRow = el('div', { style: 'display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-2);flex-wrap:wrap' }, [urlInput, labelInput, recursiveLabel, visionLabel, addBtn]);
 
   const listEl = el('div', { style: 'margin-top:var(--s-4);display:flex;flex-direction:column;gap:var(--s-3)' });
   const syncAllBtn = el('button', { class: 'tdr-btn tdr-btn--primary' }, [el('span', { html: icons.fileText(14) }), 'すべて同期']);
@@ -1333,14 +1336,21 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
       renameBtn.addEventListener('click', () => {
         const v = prompt('表示ラベル', f.label || deriveDocLabel(f.url));
         if (v == null) return;
-        addDocFolder(siteUrl, { url: f.url, label: v.trim(), recursive: f.recursive });
+        addDocFolder(siteUrl, { url: f.url, label: v.trim(), recursive: f.recursive, visionForPptx: f.visionForPptx });
         renderList();
         toast(root, 'ラベルを変更しました', 'ok');
       });
-      const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600' }, [
+      const visionToggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
+      visionToggle.checked = f.visionForPptx === true;
+      visionToggle.addEventListener('change', () => {
+        addDocFolder(siteUrl, { url: f.url, label: f.label, recursive: f.recursive, visionForPptx: visionToggle.checked });
+        toast(root, `pptx Vision を ${visionToggle.checked ? 'ON' : 'OFF'} (変更後は「同期」、既存分は強制再取り込みが必要)`, 'ok');
+      });
+      const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600;flex-wrap:wrap' }, [
         el('span', { html: icons.fileText(14), style: 'display:inline-flex;color:var(--ink-3)' }),
         el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [f.label || deriveDocLabel(f.url)]),
         renameBtn,
+        el('label', { style: 'display:flex;align-items:center;gap:4px;font-weight:400;font-size:var(--fs-xs);color:var(--ink-3)', title: 'pptx を Vision 解析 (OFF=テキストのみ)' }, [visionToggle, 'pptx Vision']),
       ]);
       const meta = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-1);font-size:var(--fs-xs)' }, [
         `URL: ${f.url}`, el('br'),
@@ -1367,8 +1377,11 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
     const url = urlInput.value.trim();
     if (!url) { toast(root, 'フォルダ URL を入力してください', 'warn'); return; }
     if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) { toast(root, 'URL は https://... か /sites/... の形式で', 'warn'); return; }
-    addDocFolder(siteUrl, { url, label: labelInput.value.trim() || undefined, recursive: recursiveCb.checked });
-    urlInput.value = ''; labelInput.value = '';
+    const label = labelInput.value.trim() || undefined;
+    addDocFolder(siteUrl, { url, label, recursive: recursiveCb.checked, visionForPptx: visionCb.checked });
+    // 同フォルダの pptx は pptx パイプラインで取り込むため、pptx 側設定にも登録 (perFile 管理用)。
+    addPptxFolder(siteUrl, { url, label, recursive: recursiveCb.checked });
+    urlInput.value = ''; labelInput.value = ''; visionCb.checked = false;
     renderList();
     toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
   });
@@ -1394,6 +1407,19 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
           ac.signal,
         );
         totalChunks += r.ingestedChunks; totalSkipped += r.skippedFiles; totalDeleted += r.deletedFiles; totalFailed += r.failedFiles;
+
+        // 同フォルダの pptx を pptx パイプラインで取り込む (Vision はフォルダ設定で ON/OFF)。
+        if (ac.signal.aborted) break;
+        const nk = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
+        const pptxCfg = listPptxFolders(siteUrl).find(p => nk(p.url) === nk(f.url));
+        if (pptxCfg) {
+          const pr = await syncPptxFolder(
+            pptxCfg, draft, siteUrl,
+            (p) => { status.textContent = `pptx: ${p.file || ''} ${p.slideIdx}/${p.slideTotal} — ${p.message ?? p.phase}`; },
+            ac.signal, { vision: f.visionForPptx === true },
+          );
+          totalChunks += pr.ingestedSlides; totalDeleted += pr.deletedFiles; totalFailed += pr.failedSlides;
+        }
       }
       showBar(100);
       const msg = `完了: ${totalChunks} チャンク取込 / スキップ ${totalSkipped} 件 / 削除 ${totalDeleted} 件${totalFailed ? ` / 失敗 ${totalFailed} 件` : ''}`;

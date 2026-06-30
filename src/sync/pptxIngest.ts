@@ -214,6 +214,20 @@ function slideSrcHash(slide: PptxSlide): string {
   return (h >>> 0).toString(36);
 }
 
+/** Vision OFF 時のスライド markdown: title / 本文テキスト / 表 / ノートだけで組む。
+ *  relay が抽出済みの rawText・tables・notes を使うので LLM 不要。 */
+function slideTextMarkdown(slide: PptxSlide): string {
+  const parts: string[] = [];
+  if (slide.title?.trim()) parts.push(`# ${slide.title.trim()}`);
+  if (slide.rawText?.trim()) parts.push(slide.rawText.trim());
+  for (const tbl of slide.tables || []) {
+    if (!tbl.length) continue;
+    parts.push(tbl.map(row => '| ' + row.map(c => (c ?? '').replace(/\n/g, ' ')).join(' | ') + ' |').join('\n'));
+  }
+  if (slide.notes?.trim()) parts.push(`(ノート) ${slide.notes.trim()}`);
+  return parts.join('\n\n').trim() || `(スライド ${slide.slideNo})`;
+}
+
 /** 1 スライド → IngestMail (markdown 化 + メタ付与)。 */
 function slideToIngestMail(
   fileInfo: FileInfo,
@@ -281,8 +295,11 @@ export async function syncPptxFolder(
   fallbackSiteUrl: string,
   onProgress?: (p: PptxIngestProgress) => void,
   signal?: AbortSignal,
-  opts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean } = {},
+  opts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean; vision?: boolean } = {},
 ): Promise<PptxIngestResult> {
+  // vision 既定は true (従来通り)。false ならスライドの title/rawText/表/ノートだけで
+  // markdown を組み、Vision LLM を呼ばない (ラベル/フォルダ単位の Vision OFF 用)。
+  const useVision = opts.vision !== false;
   const { siteUrl, folderServerRel } = resolveSpFolder(folder.url, fallbackSiteUrl);
   const sp = new SharePointClient(siteUrl);
   console.log('[tadori] pptx sync start',
@@ -458,15 +475,20 @@ export async function syncPptxFolder(
           file: f.name, fileIdx, fileTotal,
           slideIdx: j + 1, slideTotal: slides.length,
           phase: 'vision',
-          message: `${f.name} スライド ${j + 1}/${slides.length} を Vision LLM で解析中…`,
+          message: useVision
+            ? `${f.name} スライド ${j + 1}/${slides.length} を Vision LLM で解析中…`
+            : `${f.name} スライド ${j + 1}/${slides.length} をテキスト抽出中…`,
         });
 
         try {
-          const v = await describeSlide(slide as VisionSlideInput, s, signal);
+          // Vision ON: 画像を LLM で markdown 化 / OFF: title+rawText+表+ノートだけで組む。
+          const md = useVision
+            ? (await describeSlide(slide as VisionSlideInput, s, signal)).markdown
+            : slideTextMarkdown(slide);
           // サムネ (Vision 用と同じ PNG をそのまま保存。縮小は将来課題)
           const pngBytes = Uint8Array.from(atob(slide.pngBase64), c => c.charCodeAt(0)).buffer;
           const thumbUrl = await uploadThumb(sp, thumbFolderServerRel, f, slide.slideNo, pngBytes);
-          mails.push(slideToIngestMail(f, slide, v.markdown, thumbUrl, hash));
+          mails.push(slideToIngestMail(f, slide, md, thumbUrl, hash));
         } catch (e) {
           if ((e as Error).name === 'AbortError') throw e;
           console.warn('[pptx] vision/thumb failed:', f.name, slide.slideNo, (e as Error).message);

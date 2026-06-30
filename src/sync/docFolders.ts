@@ -12,6 +12,8 @@ export interface DocFolderConfig {
   url: string;
   label?: string;
   recursive: boolean;
+  /** このフォルダの .pptx を Vision 解析するか (既定 false = テキストのみ)。 */
+  visionForPptx?: boolean;
   lastSyncAt: number;
   perFile: Record<string, string>;
 }
@@ -36,7 +38,7 @@ export function listDocFolders(siteUrl: string): DocFolderConfig[] {
 export function addDocFolder(siteUrl: string, cfg: Omit<DocFolderConfig, 'lastSyncAt' | 'perFile'>): void {
   const list = load(siteUrl);
   const idx = list.findIndex(f => normalizeKey(f.url) === normalizeKey(cfg.url));
-  if (idx >= 0) list[idx] = { ...list[idx], label: cfg.label, recursive: cfg.recursive };
+  if (idx >= 0) list[idx] = { ...list[idx], label: cfg.label, recursive: cfg.recursive, visionForPptx: cfg.visionForPptx };
   else list.push({ ...cfg, lastSyncAt: 0, perFile: {} });
   save(siteUrl, list);
 }
