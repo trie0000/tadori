@@ -22,7 +22,7 @@ import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { fetchOneNoteHierarchy, fetchOneNotePages, pagesToIngestMails, type OneNoteNotebook } from '../onenote/import';
-import { recordOneNoteBatch, removeOneNoteBatch, listOneNoteBatches, setOneNoteBatchPageIds, type OneNoteBatch } from '../sync/onenoteSources';
+import { recordOneNoteBatch, removeOneNoteBatch, renameOneNoteBatch, listOneNoteBatches, setOneNoteBatchPageIds, type OneNoteBatch } from '../sync/onenoteSources';
 import { getExcludedOneNotePageIds, setExcludedOneNotePageIds } from '../onenote/exclude';
 import { ingestToSegments } from '../db/writer';
 import {
@@ -677,14 +677,26 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       }, ['再同期']);
       if (cont === 0) (resyncBtn as HTMLButtonElement).disabled = true; // コンテナ未指定 (個別ページのみ) は再同期対象なし
       resyncBtn.addEventListener('click', () => { void resyncBatch(b, resyncBtn); });
+      const renameBtn = el('button', { class: 'tdr-btn tdr-btn--sm', title: 'ラベル名を変更 (再取り込み不要)' }, ['✏ ラベル']);
+      renameBtn.addEventListener('click', () => {
+        const v = prompt('ラベル名', b.label);
+        if (v == null || !v.trim() || v.trim() === b.label) return;
+        renameOneNoteBatch(siteUrl, b.label, v.trim());
+        renderBatches();
+        toast(root, `ラベルを「${v.trim()}」に変更しました`, 'ok');
+      });
       batchesEl.appendChild(el('div', {
         style: 'display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) 0;border-bottom:1px solid var(--line)',
       }, [
         el('span', { class: 'tdr-pill', style: 'background:var(--accent-soft);color:var(--accent-strong);padding:1px 8px;border-radius:var(--r-1)' }, [b.label]),
         el('span', { class: 'tdr-hint', style: 'flex:1' }, [`ノート${b.notebookIds.length} / セクション${b.sectionIds.length} / ${b.pageIds.length}ページ`]),
-        resyncBtn, del,
+        renameBtn, resyncBtn, del,
       ]));
     }
+    batchesEl.appendChild(el('p', { class: 'tdr-hint', style: 'margin-top:var(--s-2);font-size:var(--fs-xs)' }, [
+      '別ラベルを追加するには: ツリーで対象を選び直し → ラベル欄に新しい名前を入力 → 「選択内容を適用」。',
+      '同じラベル名で適用すると、そのラベルにノート/セクションを追記 (和集合) します。',
+    ]));
   }
 
   /** バッチの選択ノート/セクション配下の現行ページを取り直し、新規ページを取り込んで対象を最新化。 */

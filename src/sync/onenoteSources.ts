@@ -101,6 +101,32 @@ export function removeOneNoteBatch(siteUrl: string, label: string): void {
   save(siteUrl, load(siteUrl).filter(b => b.label !== label));
 }
 
+/** ラベル名を変更。新名が既存なら和集合マージ。検索は pageId 照合なので再取り込み不要。 */
+export function renameOneNoteBatch(siteUrl: string, oldLabel: string, newLabel: string): void {
+  const nl = newLabel.trim();
+  if (!nl || nl === oldLabel) return;
+  const list = load(siteUrl);
+  const oi = list.findIndex(b => b.label === oldLabel);
+  if (oi < 0) return;
+  const src = list[oi];
+  const ti = list.findIndex(b => b.label === nl);
+  if (ti >= 0) {
+    // 既存ラベルへマージ
+    const t = list[ti];
+    list[ti] = {
+      ...t,
+      notebookIds: uniq([...t.notebookIds, ...src.notebookIds]),
+      sectionIds: uniq([...t.sectionIds, ...src.sectionIds]),
+      pageIds: uniq([...t.pageIds, ...src.pageIds]),
+      lastSyncAt: Date.now(),
+    };
+    list.splice(oi, 1);
+  } else {
+    list[oi] = { ...src, label: nl };
+  }
+  save(siteUrl, list);
+}
+
 /** あるページ ID が属するラベルを返す (無ければ undefined)。取り込み時の label 解決に使う。 */
 export function labelForPageId(siteUrl: string, pageId: string): string | undefined {
   for (const b of load(siteUrl)) if (b.pageIds.includes(pageId)) return b.label;
