@@ -1534,6 +1534,61 @@ function buildDiagPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLElem
   });
 
   pane.append(embed.row, runBtn);
+
+  // ── 取り込み済みドキュメント一覧 (DB の実レコードから集計) ──
+  pane.appendChild(el('p', { class: 'tdr-pane-title', style: 'margin-top:var(--s-8)' }, ['取り込み済み一覧']));
+  pane.appendChild(el('p', { class: 'tdr-hint', style: 'margin:0 0 var(--s-3)' }, [
+    'ベクトルDB に実際に入っている内容を集計します。メールは期間と宛先(ML)、それ以外はフォルダ・文書名・取り込み時間。',
+  ]));
+  const listBtn = el('button', { class: 'tdr-btn' }, ['一覧を表示']);
+  const listOut = el('div', { style: 'margin-top:var(--s-3)' });
+  const fmtTs = (s?: string): string => { if (!s) return '—'; try { return new Date(s).toLocaleString(); } catch { return s; } };
+  const fmtDay = (s?: string): string => (s ? s.slice(0, 10) : '—');
+  const KIND_JA: Record<string, string> = { mail: 'メール', onenote: 'OneNote', pptx: 'PPTX', transcript: '会議', doc: '文書' };
+  listBtn.addEventListener('click', () => {
+    listBtn.disabled = true; listOut.replaceChildren(el('div', { class: 'tdr-hint' }, ['集計中…']));
+    void (async () => {
+      try {
+        const eng = await getEngine(siteUrl);
+        const s = eng.db.ingestedSummary();
+        listOut.replaceChildren();
+        // メール
+        listOut.appendChild(el('div', { style: 'padding:var(--s-2) 0;border-bottom:1px solid var(--line)' }, [
+          el('div', { style: 'font-weight:600' }, [`メール: ${s.mail.count} 件`]),
+          el('div', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [
+            `期間: ${fmtDay(s.mail.dateMin)} 〜 ${fmtDay(s.mail.dateMax)}`,
+            el('br'),
+            `ML/宛先: ${s.mail.mls.length ? s.mail.mls.join(', ') : '—'}`,
+          ]),
+        ]));
+        // 文書系: 種別→場所→名前
+        if (s.docs.length === 0) {
+          listOut.appendChild(el('div', { class: 'tdr-hint', style: 'padding:var(--s-3) 0' }, ['文書/PPTX/会議/OneNote の取り込みはありません。']));
+        } else {
+          const head = el('div', { style: 'display:grid;grid-template-columns:54px 1fr 1.4fr 56px 130px;gap:var(--s-2);font-size:var(--fs-xs);color:var(--ink-4);padding:var(--s-2) 2px var(--s-1);position:sticky;top:0;background:var(--paper)' }, [
+            el('span', {}, ['種別']), el('span', {}, ['場所(フォルダ/ノート)']), el('span', {}, ['文書名']), el('span', {}, ['チャンク']), el('span', {}, ['取り込み時間']),
+          ]);
+          const rows = el('div', { style: 'max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-2)' }, [head]);
+          for (const d of s.docs) {
+            rows.appendChild(el('div', { style: 'display:grid;grid-template-columns:54px 1fr 1.4fr 56px 130px;gap:var(--s-2);font-size:var(--fs-sm);padding:var(--s-1) 2px;border-top:1px solid var(--line)' }, [
+              el('span', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [KIND_JA[d.kind] || d.kind]),
+              el('span', { class: 'mono', style: 'font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: d.location }, [d.location || '—']),
+              el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: d.title }, [d.title || '—']),
+              el('span', { class: 'tdr-hint' }, [String(d.chunks)]),
+              el('span', { class: 'tdr-hint', style: 'font-size:var(--fs-xs)' }, [fmtTs(d.ingestedAt)]),
+            ]));
+          }
+          listOut.appendChild(el('div', { style: 'margin-top:var(--s-2)' }, [
+            el('div', { class: 'tdr-hint', style: 'margin-bottom:var(--s-1)' }, [`文書系: ${s.docs.length} 件`]),
+            rows,
+          ]));
+        }
+      } catch (e) {
+        listOut.replaceChildren(el('div', { class: 'tdr-hint' }, [`失敗: ${e instanceof Error ? e.message : String(e)}`]));
+      } finally { listBtn.disabled = false; }
+    })();
+  });
+  pane.append(listBtn, listOut);
 }
 
 // ─── 利用料 ─────────────────────────────────────────────────────────────────────

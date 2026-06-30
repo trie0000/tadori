@@ -42,6 +42,8 @@ export interface SegmentRecord {
    *  再取り込み時に「内容が変わっていないチャンクは embed をスキップ」する
    *  差分判定に使う。 */
   srcHash?: string;
+  /** ベクトルDB へ書き込んだ時刻 (ISO)。診断の「取り込み時間」表示用。 */
+  ingestedAt?: string;
   /** 親ドキュメント内のチャンク番号 (0 始まり)。単一レコードならどちらも省略。 */
   chunkIdx?: number;
   /** 親ドキュメントの総チャンク数。 */

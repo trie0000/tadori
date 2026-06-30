@@ -63,6 +63,8 @@ export interface MailRecord {
   docServerRelUrl?: string;
   /** ソース内容ハッシュ (差分判定用)。 */
   srcHash?: string;
+  /** ベクトルDB へ書き込んだ時刻 (ISO)。診断の「取り込み時間」表示に使う。 */
+  ingestedAt?: string;
 }
 
 export interface DbHit {
@@ -183,6 +185,7 @@ export class VectorDb {
         docFile: r.docFile,
         docServerRelUrl: r.docServerRelUrl,
         srcHash: r.srcHash,
+        ingestedAt: r.ingestedAt,
       });
     }
     this.appliedSeq.set(r.messageId, r.seq);
@@ -275,6 +278,41 @@ export class VectorDb {
       }
     }
     return [...seen.values()].sort((a, b) => a.location.localeCompare(b.location) || a.title.localeCompare(b.title));
+  }
+
+  /** 診断用: 取り込み済みの内訳。メールは期間+ML、その他はファイル/ページ単位で集約。 */
+  ingestedSummary(): {
+    mail: { count: number; dateMin?: string; dateMax?: string; mls: string[] };
+    docs: Array<{ kind: string; location: string; title: string; chunks: number; date?: string; ingestedAt?: string }>;
+  } {
+    let mailCount = 0; let dateMin = ''; let dateMax = '';
+    const mls = new Set<string>();
+    const docMap = new Map<string, { kind: string; location: string; title: string; chunks: number; date?: string; ingestedAt?: string }>();
+    const dirOf = (u?: string): string => { if (!u) return ''; const c = u.replace(/\/+$/, ''); const i = c.lastIndexOf('/'); return i < 0 ? '' : c.slice(0, i); };
+    const baseOf = (u?: string): string => { if (!u) return ''; const c = u.replace(/\/+$/, ''); const i = c.lastIndexOf('/'); return i < 0 ? c : c.slice(i + 1); };
+    const dec = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
+    for (const r of this.records.values()) {
+      const k = r.kind ?? 'mail';
+      if (k === 'mail') {
+        mailCount++;
+        if (r.date) { if (!dateMin || r.date < dateMin) dateMin = r.date; if (!dateMax || r.date > dateMax) dateMax = r.date; }
+        for (const a of [...(r.to ?? []), ...(r.cc ?? [])]) if (a) mls.add(a.toLowerCase());
+        continue;
+      }
+      let key = '', location = '', title = '';
+      if (k === 'doc') { key = r.docServerRelUrl || r.conversationId; location = dec(dirOf(r.docServerRelUrl)); title = r.docFile || baseOf(r.docServerRelUrl) || r.subject; }
+      else if (k === 'pptx') { key = r.pptxServerRelUrl || r.conversationId; location = dec(dirOf(r.pptxServerRelUrl)); title = r.pptxFile || baseOf(r.pptxServerRelUrl) || r.subject; }
+      else if (k === 'transcript') { key = r.vttServerRelUrl || r.conversationId; location = dec(dirOf(r.vttServerRelUrl)); title = r.transcriptFile || baseOf(r.vttServerRelUrl) || r.subject; }
+      else if (k === 'onenote') { key = r.conversationId; location = r.from || ''; title = (r.subject || '').split(' - ')[0]; }
+      else { key = r.conversationId || r.messageId; title = r.subject; }
+      if (!key) key = r.messageId;
+      const mk = k + '|' + key;
+      const cur = docMap.get(mk);
+      if (cur) { cur.chunks++; if (r.ingestedAt && (!cur.ingestedAt || r.ingestedAt > cur.ingestedAt)) cur.ingestedAt = r.ingestedAt; }
+      else docMap.set(mk, { kind: k, location, title, chunks: 1, date: r.date || undefined, ingestedAt: r.ingestedAt });
+    }
+    const docs = [...docMap.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.location.localeCompare(b.location) || a.title.localeCompare(b.title));
+    return { mail: { count: mailCount, dateMin: dateMin || undefined, dateMax: dateMax || undefined, mls: [...mls].sort() }, docs };
   }
 
   /** 同一スレッド (conversationId) のレコードを受信日時の昇順で返す。 */

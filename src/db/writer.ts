@@ -87,6 +87,7 @@ export async function ingestToSegments(
   }
 
   const eng = await getEngine(siteUrl);
+  const nowIso = new Date().toISOString();   // この取り込みバッチの「取り込み時間」
   onProgress?.('sync', 0, 0);
   await eng.sync.sync(); // 書き込み前に最新へ追いつく
 
@@ -187,6 +188,7 @@ export async function ingestToSegments(
       docFile: m.docFile,
       docServerRelUrl: m.docServerRelUrl,
       srcHash: m.srcHash,
+      ingestedAt: nowIso,
       emb: encodeEmbedding(normalize(vecs[i])),
     }));
 
