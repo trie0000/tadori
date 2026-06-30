@@ -58,11 +58,12 @@ export function buildScope(siteUrl: string, activeKinds: SearchKind[], sel: SubS
     const ids = labelsToPageIds(siteUrl, sel.onenote);
     if (ids.length) scope.onenotePageIds = ids;
   }
+  if (sel.folders.length) scope.folders = sel.folders.map(toServerRelativeUrl);
+  // 「フォルダ」は doc/pptx/transcript を1グループとして扱う。グループのどれか1種別でも
+  // 有効、またはフォルダを選択しているなら、3種別すべてを kinds に含める
+  // (doc だけ active だと pptx/transcript が kindFilter で落ちる不具合を防ぐ)。
   let kinds = activeKinds;
-  if (sel.folders.length) {
-    scope.folders = sel.folders.map(toServerRelativeUrl);
-    // フォルダ配下の doc/pptx/transcript を kindFilter で落とさないよう補完。
-    kinds = [...new Set([...activeKinds, ...FOLDER_KINDS])];
-  }
+  const folderGroupOn = sel.folders.length > 0 || FOLDER_KINDS.some(k => activeKinds.includes(k));
+  if (folderGroupOn) kinds = [...new Set([...activeKinds, ...FOLDER_KINDS])];
   return { kinds, scope };
 }
