@@ -886,9 +886,18 @@ function buildPptxImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
     for (const f of folders) {
       const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
       const fileCount = Object.keys(f.perFile).length;
+      const renameBtn = el('button', { class: 'tdr-btn tdr-btn--sm', title: 'ラベルを変更 (再取り込み不要)' }, ['✏ ラベル']);
+      renameBtn.addEventListener('click', () => {
+        const v = prompt('表示ラベル', f.label || deriveLabel(f.url));
+        if (v == null) return;
+        addPptxFolder(siteUrl, { url: f.url, label: v.trim(), recursive: f.recursive });
+        renderList();
+        toast(root, 'ラベルを変更しました', 'ok');
+      });
       const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600' }, [
         el('span', { html: icons.folder(14), style: 'display:inline-flex;color:var(--ink-3)' }),
         el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [f.label || deriveLabel(f.url)]),
+        renameBtn,
       ]);
       const meta = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-1);font-size:var(--fs-xs)' }, [
         `URL: ${f.url}`,
@@ -1105,9 +1114,18 @@ function buildTranscriptImport(pane: HTMLElement, draft: RuntimeSettings, root: 
     for (const f of folders) {
       const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
       const fileCount = Object.keys(f.perFile).length;
+      const renameBtn = el('button', { class: 'tdr-btn tdr-btn--sm', title: 'ラベルを変更 (再取り込み不要)' }, ['✏ ラベル']);
+      renameBtn.addEventListener('click', () => {
+        const v = prompt('表示ラベル', f.label || deriveTranscriptLabel(f.url));
+        if (v == null) return;
+        addTranscriptFolder(siteUrl, { url: f.url, label: v.trim(), recursive: f.recursive });
+        renderList();
+        toast(root, 'ラベルを変更しました', 'ok');
+      });
       const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600' }, [
         el('span', { html: icons.mic(14), style: 'display:inline-flex;color:var(--ink-3)' }),
         el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [f.label || deriveTranscriptLabel(f.url)]),
+        renameBtn,
       ]);
       const meta = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-1);font-size:var(--fs-xs)' }, [
         `URL: ${f.url}`, el('br'),
@@ -1240,9 +1258,18 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
     for (const f of folders) {
       const lastSync = f.lastSyncAt ? new Date(f.lastSyncAt).toLocaleString() : '未同期';
       const fileCount = Object.keys(f.perFile).length;
+      const renameBtn = el('button', { class: 'tdr-btn tdr-btn--sm', title: 'ラベルを変更 (再取り込み不要)' }, ['✏ ラベル']);
+      renameBtn.addEventListener('click', () => {
+        const v = prompt('表示ラベル', f.label || deriveDocLabel(f.url));
+        if (v == null) return;
+        addDocFolder(siteUrl, { url: f.url, label: v.trim(), recursive: f.recursive });
+        renderList();
+        toast(root, 'ラベルを変更しました', 'ok');
+      });
       const head = el('div', { style: 'display:flex;align-items:center;gap:var(--s-2);font-weight:600' }, [
         el('span', { html: icons.fileText(14), style: 'display:inline-flex;color:var(--ink-3)' }),
         el('span', { class: 'mono', style: 'font-size:var(--fs-sm)' }, [f.label || deriveDocLabel(f.url)]),
+        renameBtn,
       ]);
       const meta = el('div', { class: 'tdr-hint', style: 'margin-top:var(--s-1);font-size:var(--fs-xs)' }, [
         `URL: ${f.url}`, el('br'),
