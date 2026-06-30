@@ -29,7 +29,7 @@ function setupDb(): void {
 
 test('doc スコープ空 [] でも doc がヒットする (回帰: 空で全消え)', async () => {
   setupDb();
-  const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: [] } });
+  const hits = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { folders: [] } });
   assert.ok(hits.length > 0, '空スコープで 0 件になってはいけない');
   assert.ok(hits.every(h => h.kind === 'doc'));
   assert.equal(hits[0].docFile, 'f3.pdf');
@@ -44,16 +44,16 @@ test('kind フィルタ=pptx は pptx のみ', async () => {
 
 test('doc フォルダ絞り込み: 一致は通る / 不一致は0件', async () => {
   setupDb();
-  const ok = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: [FOLDER] } });
+  const ok = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { folders: [FOLDER] } });
   assert.ok(ok.length > 0 && ok.every(h => h.kind === 'doc'));
-  const ng = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { docFolders: ['/sites/n365/Shared Documents/別'] } });
+  const ng = await searchVectors('マニュアル', S, 'site', 10, { kinds: ['doc'], scope: { folders: ['/sites/n365/Shared Documents/別'] } });
   assert.equal(ng.length, 0);
 });
 
 test('pptx フォルダ絞り込み: 一致フォルダのみ', async () => {
   setupDb();
   __setQuery(normalize(vec(2 + 5000)));   // pptx#2 に一致
-  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['pptx'], scope: { pptxFolders: ['/sites/n365/Shared Documents/PPTX'] } });
+  const hits = await searchVectors('x', S, 'site', 10, { kinds: ['pptx'], scope: { folders: ['/sites/n365/Shared Documents/PPTX'] } });
   assert.ok(hits.length > 0 && hits.every(h => h.kind === 'pptx'));
 });
 

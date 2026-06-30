@@ -16,6 +16,8 @@ export interface DocFolderConfig {
   visionForPptx?: boolean;
   lastSyncAt: number;
   perFile: Record<string, string>;
+  /** 同フォルダ内 .pptx の差分判定用 perFile (pptx パイプラインが管理。pptxFolders は使わない)。 */
+  pptxPerFile?: Record<string, string>;
 }
 
 function load(siteUrl: string): DocFolderConfig[] {
@@ -52,6 +54,15 @@ export function updateDocFolderSync(siteUrl: string, url: string, perFile: Recor
   const idx = list.findIndex(f => normalizeKey(f.url) === normalizeKey(url));
   if (idx < 0) return;
   list[idx] = { ...list[idx], lastSyncAt: Date.now(), perFile };
+  save(siteUrl, list);
+}
+
+/** 同フォルダ内 pptx の perFile を更新 (pptx パイプラインの persist コールバックから)。 */
+export function updateDocFolderPptxSync(siteUrl: string, url: string, pptxPerFile: Record<string, string>): void {
+  const list = load(siteUrl);
+  const idx = list.findIndex(f => normalizeKey(f.url) === normalizeKey(url));
+  if (idx < 0) return;
+  list[idx] = { ...list[idx], pptxPerFile };
   save(siteUrl, list);
 }
 

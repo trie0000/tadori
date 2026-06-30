@@ -295,7 +295,7 @@ export async function syncPptxFolder(
   fallbackSiteUrl: string,
   onProgress?: (p: PptxIngestProgress) => void,
   signal?: AbortSignal,
-  opts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean; vision?: boolean } = {},
+  opts: { force?: boolean; targetFiles?: ReadonlySet<string>; thumbsOnly?: boolean; vision?: boolean; persist?: (perFile: Record<string, string>) => void } = {},
 ): Promise<PptxIngestResult> {
   // vision 既定は true (従来通り)。false ならスライドの title/rawText/表/ノートだけで
   // markdown を組み、Vision LLM を呼ばない (ラベル/フォルダ単位の Vision OFF 用)。
@@ -527,10 +527,10 @@ export async function syncPptxFolder(
     }
   }
 
-  // 5. perFile を保存 (現在の Tadori サイト = fallbackSiteUrl のキー配下に。
-  //    PPTX フォルダ URL の所属サイトと Tadori 起動サイトは別物の場合もあるが、
-  //    UI 設定は「Tadori を開いているサイト」に紐付くのが直感的)
-  updatePptxFolderSync(fallbackSiteUrl, folder.url, newPerFile);
+  // 5. perFile を保存。opts.persist があれば pptxFolders ではなくそちらへ
+  //    (統合フォルダ取り込み = docFolder 側に pptx perFile を持たせる場合に使う)。
+  if (opts.persist) opts.persist(newPerFile);
+  else updatePptxFolderSync(fallbackSiteUrl, folder.url, newPerFile);
 
   return {
     ingestedFiles,

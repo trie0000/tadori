@@ -1357,51 +1357,56 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
     const sel = loadSubSel(siteUrlArg);
     const menu = el('div', { class: 'tdr-source-menu', role: 'menu', style: 'min-width:260px;max-width:380px;max-height:60vh;overflow:auto;padding:var(--s-2) 0' });
 
-    const optsFor = (k: SearchKind): { id: string; label: string }[] => {
-      switch (k) {
-        case 'mail': return (loadSettings().mlAddresses || []).map(a => ({ id: a, label: a }));
-        case 'onenote': return oneNoteLabels(siteUrlArg).map(l => ({ id: l, label: l }));
-        case 'pptx': return listPptxFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
-        case 'transcript': return listTranscriptFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
-        case 'doc': return listDocFolders(siteUrlArg).map(f => ({ id: f.url, label: f.label || deriveDocLabel(f.url) }));
-        default: return [];
-      }
+    // 取り込みフォルダ (文書/PPTX/会議) を URL で重複排除して 1 リストに統合。
+    const unifiedFolders = (): { id: string; label: string }[] => {
+      const norm = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
+      const m = new Map<string, { id: string; label: string }>();
+      const add = (url: string, label?: string): void => { const k = norm(url); if (!m.has(k)) m.set(k, { id: url, label: label || deriveDocLabel(url) }); };
+      for (const f of listDocFolders(siteUrlArg)) add(f.url, f.label);
+      for (const f of listPptxFolders(siteUrlArg)) add(f.url, f.label);
+      for (const f of listTranscriptFolders(siteUrlArg)) add(f.url, f.label);
+      return [...m.values()];
     };
-    const setKind = (k: SearchKind, on: boolean): void => {
-      if (on) active = ALL_SEARCH_KINDS.filter(x => active.includes(x) || x === k);
-      else active = active.filter(x => x !== k);
+    // セクション: メール / OneNote / フォルダ。folders は doc/pptx/transcript を束ねて扱う。
+    type Sec = { key: 'mail' | 'onenote' | 'folders'; label: string; icon: keyof typeof icons; kinds: SearchKind[]; opts: () => { id: string; label: string }[] };
+    const SECTIONS: Sec[] = [
+      { key: 'mail', label: SEARCH_KIND_LABELS.mail, icon: SEARCH_KIND_ICON.mail, kinds: ['mail'], opts: () => (loadSettings().mlAddresses || []).map(a => ({ id: a, label: a })) },
+      { key: 'onenote', label: SEARCH_KIND_LABELS.onenote, icon: SEARCH_KIND_ICON.onenote, kinds: ['onenote'], opts: () => oneNoteLabels(siteUrlArg).map(l => ({ id: l, label: l })) },
+      { key: 'folders', label: 'フォルダ (文書/PPTX/会議)', icon: 'folder', kinds: ['doc', 'pptx', 'transcript'], opts: unifiedFolders },
+    ];
+    const setKinds = (ks: SearchKind[], on: boolean): void => {
+      if (on) active = ALL_SEARCH_KINDS.filter(x => active.includes(x) || ks.includes(x));
+      else active = active.filter(x => !ks.includes(x));
       setSelectedKinds(active);
       onChange(active);
     };
 
     const render = (): void => {
       menu.replaceChildren();
-      for (const k of ALL_SEARCH_KINDS) {
-        const on = active.includes(k);
+      for (const sec of SECTIONS) {
+        const on = sec.kinds.some(k => active.includes(k));
         const kindCb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
         kindCb.checked = on;
-        kindCb.addEventListener('change', () => { setKind(k, kindCb.checked); render(); });
-        const head = el('label', {
+        kindCb.addEventListener('change', () => { setKinds(sec.kinds, kindCb.checked); render(); });
+        menu.appendChild(el('label', {
           class: 'tdr-source-menu-item', style: 'cursor:pointer;font-weight:600;gap:var(--s-2)',
-        }, [kindCb, el('span', { class: 'ic', html: icons[SEARCH_KIND_ICON[k]](14) }), el('span', {}, [SEARCH_KIND_LABELS[k]])]);
-        menu.appendChild(head);
+        }, [kindCb, el('span', { class: 'ic', html: icons[sec.icon](14) }), el('span', {}, [sec.label])]));
 
-        const opts = optsFor(k);
-        const sub = sel[k];
+        const opts = sec.opts();
+        const sub = sel[sec.key];
         if (opts.length === 0) {
-          const hint = k === 'mail' ? '(設定 → 取り込み で to/cc を登録)' : '(設定 → 取り込み で登録)';
+          const hint = sec.key === 'mail' ? '(設定 → 取り込み で to/cc を登録)' : '(設定 → 取り込み で登録)';
           menu.appendChild(el('div', { class: 'tdr-hint', style: 'padding:0 12px 6px 34px;font-size:var(--fs-xs)' }, [hint]));
           continue;
         }
-        // 小項目: 全部外す = 全件。チェックでその種別を自動 ON。
         for (const o of opts) {
           const cb = el('input', { type: 'checkbox', style: 'margin:0' }) as HTMLInputElement;
           cb.checked = sub.includes(o.id);
           cb.addEventListener('change', () => {
-            const set = new Set(sel[k]);
-            if (cb.checked) { set.add(o.id); if (!active.includes(k)) setKind(k, true); }
+            const set = new Set(sel[sec.key]);
+            if (cb.checked) { set.add(o.id); if (!on) setKinds(sec.kinds, true); }
             else set.delete(o.id);
-            sel[k] = [...set];
+            sel[sec.key] = [...set];
             saveSubSel(siteUrlArg, sel);
             onChange(active);
             render();
@@ -1607,7 +1612,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   // デフォルト: 全 kind が対象。ユーザが × で外すと該当 kind を除外、+ で再追加。
   let activeKinds: SearchKind[] = getSelectedKinds();
   const sourceRow = el('div', { class: 'tdr-source-row', 'aria-label': '検索対象のソース' });
-  const subKey = { mail: 'mail', onenote: 'onenote', pptx: 'pptx', transcript: 'transcript', doc: 'doc' } as const;
+  const subKey = { mail: 'mail', onenote: 'onenote', pptx: 'folders', transcript: 'folders', doc: 'folders' } as const;
   const renderSourceRow = (): void => {
     sourceRow.replaceChildren();
     sourceRow.appendChild(el('span', { class: 'tdr-source-label' }, ['検索対象:']));

@@ -36,7 +36,7 @@ import {
 } from '../sync/transcriptFolders';
 import { syncTranscriptFolder, type TranscriptIngestProgress } from '../sync/transcriptIngest';
 import {
-  listDocFolders, addDocFolder, removeDocFolder,
+  listDocFolders, addDocFolder, removeDocFolder, updateDocFolderPptxSync,
   deriveLabel as deriveDocLabel, type DocFolderConfig,
 } from '../sync/docFolders';
 import { syncDocFolder, type DocIngestProgress } from '../sync/docIngest';
@@ -1379,8 +1379,6 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
     if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) { toast(root, 'URL は https://... か /sites/... の形式で', 'warn'); return; }
     const label = labelInput.value.trim() || undefined;
     addDocFolder(siteUrl, { url, label, recursive: recursiveCb.checked, visionForPptx: visionCb.checked });
-    // 同フォルダの pptx は pptx パイプラインで取り込むため、pptx 側設定にも登録 (perFile 管理用)。
-    addPptxFolder(siteUrl, { url, label, recursive: recursiveCb.checked });
     urlInput.value = ''; labelInput.value = ''; visionCb.checked = false;
     renderList();
     toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
@@ -1409,17 +1407,19 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
         totalChunks += r.ingestedChunks; totalSkipped += r.skippedFiles; totalDeleted += r.deletedFiles; totalFailed += r.failedFiles;
 
         // 同フォルダの pptx を pptx パイプラインで取り込む (Vision はフォルダ設定で ON/OFF)。
+        // pptxFolders は使わず、perFile は docFolder.pptxPerFile に持たせる (専用登録を作らない)。
         if (ac.signal.aborted) break;
-        const nk = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
-        const pptxCfg = listPptxFolders(siteUrl).find(p => nk(p.url) === nk(f.url));
-        if (pptxCfg) {
-          const pr = await syncPptxFolder(
-            pptxCfg, draft, siteUrl,
-            (p) => { status.textContent = `pptx: ${p.file || ''} ${p.slideIdx}/${p.slideTotal} — ${p.message ?? p.phase}`; },
-            ac.signal, { vision: f.visionForPptx === true },
-          );
-          totalChunks += pr.ingestedSlides; totalDeleted += pr.deletedFiles; totalFailed += pr.failedSlides;
-        }
+        const pptxCfg: PptxFolderConfig = {
+          url: f.url, label: f.label, recursive: f.recursive,
+          perFile: f.pptxPerFile || {}, lastSyncAt: f.lastSyncAt,
+        };
+        const pr = await syncPptxFolder(
+          pptxCfg, draft, siteUrl,
+          (p) => { status.textContent = `pptx: ${p.file || ''} ${p.slideIdx}/${p.slideTotal} — ${p.message ?? p.phase}`; },
+          ac.signal,
+          { vision: f.visionForPptx === true, persist: (pf) => updateDocFolderPptxSync(siteUrl, f.url, pf) },
+        );
+        totalChunks += pr.ingestedSlides; totalDeleted += pr.deletedFiles; totalFailed += pr.failedSlides;
       }
       showBar(100);
       const msg = `完了: ${totalChunks} チャンク取込 / スキップ ${totalSkipped} 件 / 削除 ${totalDeleted} 件${totalFailed ? ` / 失敗 ${totalFailed} 件` : ''}`;

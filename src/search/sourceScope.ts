@@ -18,9 +18,9 @@ export interface SourceScope {
    *  チャット側がバッチ設定から解決して渡す。レコードへの label 付与に依存しないので
    *  既存取り込み済みページも再取り込み不要で絞れる。 */
   onenotePageIds?: string[];
-  docFolders?: string[];
-  pptxFolders?: string[];
-  transcriptFolders?: string[];
+  /** フォルダ取り込みの対象フォルダ (serverRelativeUrl 接頭辞)。種別横断で doc/pptx/
+   *  transcript レコードを照合 (1フォルダに pdf/pptx 等が混在しても1つの選択で絞れる)。 */
+  folders?: string[];
 }
 
 export interface ScopeRecord {
@@ -57,9 +57,7 @@ export function makeInScope(scope?: SourceScope): (r: ScopeRecord) => boolean {
   const mail = nonEmpty(scope?.mailAddresses)?.map(a => a.trim().toLowerCase());
   const note = nonEmpty(scope?.onenotePageIds);
   const noteSet = note ? new Set(note) : null;
-  const docs = nonEmpty(scope?.docFolders);
-  const ppts = nonEmpty(scope?.pptxFolders);
-  const trns = nonEmpty(scope?.transcriptFolders);
+  const folders = nonEmpty(scope?.folders);   // doc/pptx/transcript 横断のフォルダ絞り込み
 
   return (r: ScopeRecord): boolean => {
     switch (r.kind) {
@@ -72,14 +70,14 @@ export function makeInScope(scope?: SourceScope): (r: ScopeRecord) => boolean {
         if (!noteSet) return true;
         return r.conversationId != null && noteSet.has(r.conversationId);
       case 'doc':
-        if (!docs) return true;
-        return prefixMatch(r.docServerRelUrl, r.conversationId, docs);
+        if (!folders) return true;
+        return prefixMatch(r.docServerRelUrl, r.conversationId, folders);
       case 'pptx':
-        if (!ppts) return true;
-        return prefixMatch(r.pptxServerRelUrl, r.conversationId, ppts);
+        if (!folders) return true;
+        return prefixMatch(r.pptxServerRelUrl, r.conversationId, folders);
       case 'transcript':
-        if (!trns) return true;
-        return prefixMatch(r.vttServerRelUrl, r.conversationId, trns);
+        if (!folders) return true;
+        return prefixMatch(r.vttServerRelUrl, r.conversationId, folders);
       default:
         return true;
     }
