@@ -1358,10 +1358,12 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
         `最終同期: ${lastSync}　/　文書: ${fileCount} 件　/　${f.recursive ? '再帰あり' : '直下のみ'}`,
       ]);
       const syncBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['同期']);
+      const forceBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)', title: '更新時刻に関係なく全ファイルを再解析 (pptx Vision 切替後・別サイトへ再投入時など)' }, ['強制再取り込み']);
       const delBtn = el('button', { class: 'tdr-btn', style: 'font-size:var(--fs-sm)' }, ['削除']);
-      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, delBtn]);
+      const actions = el('div', { style: 'display:flex;gap:var(--s-2);margin-top:var(--s-2)' }, [syncBtn, forceBtn, delBtn]);
       const card = el('div', { style: 'border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)' }, [head, meta, actions]);
       syncBtn.addEventListener('click', () => { void runSync([f]); });
+      forceBtn.addEventListener('click', () => { void runSync([f], { force: true }); });
       delBtn.addEventListener('click', () => {
         confirmModal({
           root, title: 'ドキュメントフォルダ設定を削除',
@@ -1385,7 +1387,7 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
     toast(root, 'フォルダを追加しました。「同期」で取り込みを開始してください', 'ok');
   });
 
-  async function runSync(folders: DocFolderConfig[]): Promise<void> {
+  async function runSync(folders: DocFolderConfig[], runOpts: { force?: boolean } = {}): Promise<void> {
     if (ac) return;
     ac = new AbortController();
     syncAllBtn.style.display = 'none'; stopBtn.style.display = '';
@@ -1404,6 +1406,7 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
             if (p.fileTotal > 0) showBar(Math.min(99, Math.max(0, Math.round((p.fileIdx - 1) / p.fileTotal * 100))));
           },
           ac.signal,
+          { force: runOpts.force },
         );
         totalChunks += r.ingestedChunks; totalSkipped += r.skippedFiles; totalDeleted += r.deletedFiles; totalFailed += r.failedFiles;
 
@@ -1418,7 +1421,7 @@ function buildDocImport(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEle
           pptxCfg, draft, siteUrl,
           (p) => { status.textContent = `pptx: ${p.file || ''} ${p.slideIdx}/${p.slideTotal} — ${p.message ?? p.phase}`; },
           ac.signal,
-          { vision: f.visionForPptx === true, persist: (pf) => updateDocFolderPptxSync(siteUrl, f.url, pf) },
+          { vision: f.visionForPptx === true, force: runOpts.force, persist: (pf) => updateDocFolderPptxSync(siteUrl, f.url, pf) },
         );
         totalChunks += pr.ingestedSlides; totalDeleted += pr.deletedFiles; totalFailed += pr.failedSlides;
       }

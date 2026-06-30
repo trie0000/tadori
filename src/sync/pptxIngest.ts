@@ -337,12 +337,12 @@ export async function syncPptxFolder(
   // サムネは Tadori 管理フォルダ配下 (<site>/Shared Documents/Tadori/pptx-thumbs) に集約。
   // ★ オリジナルの PPTX フォルダには一切ファイルを作らない (ユーザの資料置き場を汚さない)。
   //   セグメント (manifest/seg-*.json) と同じ Tadori フォルダ配下にまとめる。
-  const thumbFolderServerRel = (await getEngine(siteUrl)).store.pptxThumbFolder;
+  const thumbFolderServerRel = (await getEngine(fallbackSiteUrl)).store.pptxThumbFolder;
 
   // 3. 削除されたファイルの chunk を消す (サムネ再生成モードでは検索データを触らない)
   let deletedFiles = 0;
   if (!opts.thumbsOnly && deleted.length > 0) {
-    const eng = await getEngine(siteUrl);
+    const eng = await getEngine(fallbackSiteUrl);
     for (const fname of deleted) {
       if (signal?.aborted) break;
       onProgress?.({ file: fname, fileIdx: 0, fileTotal: 0, slideIdx: 0, slideTotal: 0, phase: 'delete', message: `${fname} は SP から消えていた — chunk を削除` });
@@ -350,7 +350,7 @@ export async function syncPptxFolder(
       const stale = `${folderServerRel}/${fname}`;
       const messageIds = eng.db.messageIdsForConversation(stale);
       for (const mid of messageIds) {
-        try { await deleteFromSegments(mid, siteUrl); } catch (e) {
+        try { await deleteFromSegments(mid, fallbackSiteUrl); } catch (e) {
           console.warn('[pptx] delete chunk failed:', mid, (e as Error).message);
         }
       }
@@ -434,7 +434,7 @@ export async function syncPptxFolder(
 
       // 差分判定用に既存レコードを引く (messageId → srcHash)。
       // force=true (強制 / 個別再取込) のときは差分スキップせず全スライド Vision。
-      const eng = await getEngine(siteUrl);
+      const eng = await getEngine(fallbackSiteUrl);
       const willHave = new Set(slides.map(sl => `pptx://${f.serverRelativeUrl}#${sl.slideNo}`));
 
       // 削除されたスライド (新版に無い既存 messageId) を検索 DB から除去
@@ -442,7 +442,7 @@ export async function syncPptxFolder(
         const existing = eng.db.messageIdsForConversation(f.serverRelativeUrl);
         for (const mid of existing) {
           if (!willHave.has(mid)) {
-            try { await deleteFromSegments(mid, siteUrl); deletedSlides++; }
+            try { await deleteFromSegments(mid, fallbackSiteUrl); deletedSlides++; }
             catch (e) { console.warn('[pptx] prune stale slide:', mid, (e as Error).message); }
           }
         }
@@ -508,7 +508,7 @@ export async function syncPptxFolder(
           phase: 'embed',
           message: `${f.name} を埋め込み中… (${mails.length} chunk)`,
         });
-        await ingestToSegments(mails, s, siteUrl, undefined, signal);
+        await ingestToSegments(mails, s, fallbackSiteUrl, undefined, signal);
         ingestedSlides += mails.length;
       }
       // 何か処理した (新規/更新 or 削除) ファイルをカウント
