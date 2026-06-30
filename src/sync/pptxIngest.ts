@@ -448,53 +448,58 @@ export async function syncPptxFolder(
         }
       } catch { /* engine 未初期化等は無視 (初回) */ }
 
-      // 各スライド: 内容ハッシュが既存と一致なら Vision/embed をスキップ (差分取込)。
+      // 各スライドは互いに独立なので、差分判定で残ったスライドの Vision/テキスト解析 +
+      // サムネ生成を並列実行する (visionConcurrency 本まで)。mails は push 順不同で問題ない。
       const mails: IngestMail[] = [];
+      const toProcess: { slide: PptxSlide; idx: number; hash: string }[] = [];
       for (let j = 0; j < slides.length; j++) {
-        if (signal?.aborted) break;
         const slide = slides[j];
         const mid = `pptx://${f.serverRelativeUrl}#${slide.slideNo}`;
         const hash = slideSrcHash(slide);
-
         // 差分判定: force でなく、既存レコードの srcHash と一致 → スキップ
         if (!opts.force) {
           const existingRec = eng.db.get(mid);
           if (existingRec && existingRec.srcHash && existingRec.srcHash === hash) {
             skippedSlides++;
-            onProgress?.({
-              file: f.name, fileIdx, fileTotal,
-              slideIdx: j + 1, slideTotal: slides.length,
-              phase: 'skip',
-              message: `${f.name} スライド ${j + 1}/${slides.length} は変更なし — スキップ`,
-            });
+            onProgress?.({ file: f.name, fileIdx, fileTotal, slideIdx: j + 1, slideTotal: slides.length, phase: 'skip', message: `${f.name} スライド ${j + 1}/${slides.length} は変更なし — スキップ` });
             continue;
           }
         }
+        toProcess.push({ slide, idx: j, hash });
+      }
 
+      const concurrency = Math.min(16, Math.max(1, s.visionConcurrency || 3));
+      const processOne = async (item: { slide: PptxSlide; idx: number; hash: string }): Promise<void> => {
+        if (signal?.aborted) return;
+        const { slide, idx, hash } = item;
         onProgress?.({
-          file: f.name, fileIdx, fileTotal,
-          slideIdx: j + 1, slideTotal: slides.length,
-          phase: 'vision',
+          file: f.name, fileIdx, fileTotal, slideIdx: idx + 1, slideTotal: slides.length, phase: 'vision',
           message: useVision
-            ? `${f.name} スライド ${j + 1}/${slides.length} を Vision LLM で解析中…`
-            : `${f.name} スライド ${j + 1}/${slides.length} をテキスト抽出中…`,
+            ? `${f.name} スライド ${idx + 1}/${slides.length} を Vision 解析中… (並列${concurrency})`
+            : `${f.name} スライド ${idx + 1}/${slides.length} をテキスト抽出中… (並列${concurrency})`,
         });
-
         try {
           // Vision ON: 画像を LLM で markdown 化 / OFF: title+rawText+表+ノートだけで組む。
           const md = useVision
             ? (await describeSlide(slide as VisionSlideInput, s, signal)).markdown
             : slideTextMarkdown(slide);
-          // サムネ (Vision 用と同じ PNG をそのまま保存。縮小は将来課題)
           const pngBytes = Uint8Array.from(atob(slide.pngBase64), c => c.charCodeAt(0)).buffer;
           const thumbUrl = await uploadThumb(sp, thumbFolderServerRel, f, slide.slideNo, pngBytes);
           mails.push(slideToIngestMail(f, slide, md, thumbUrl, hash));
         } catch (e) {
-          if ((e as Error).name === 'AbortError') throw e;
+          if ((e as Error).name === 'AbortError') return; // 中断は静かに (上位の signal で停止)
           console.warn('[pptx] vision/thumb failed:', f.name, slide.slideNo, (e as Error).message);
           failedSlides++;
         }
-      }
+      };
+
+      // 並列プール: 同時に concurrency 本まで。cursor を共有して各ワーカが次を取る。
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(concurrency, toProcess.length) }, async () => {
+        while (cursor < toProcess.length && !signal?.aborted) {
+          await processOne(toProcess[cursor++]);
+        }
+      }));
 
       if (mails.length > 0) {
         onProgress?.({

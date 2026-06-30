@@ -368,6 +368,7 @@ function buildIngestPane(pane: HTMLElement, draft: RuntimeSettings, root: HTMLEl
     el('p', { class: 'tdr-hint' }, ['取り込み対象アドレス。1 行に 1 件。']),
     ...mkRow('取り込み間隔 (秒)', mkInput(String(draft.ingestIntervalSec), v => { draft.ingestIntervalSec = Number(v) || 30; }), 'デフォルト 30 秒'),
     ...mkRow('埋め込み並列数 (1〜10)', mkInput(String(draft.embedConcurrency), v => { draft.embedConcurrency = Math.min(10, Math.max(1, Number(v) || 3)); }), '大きいほど取り込みが速いが API 負荷増。デフォルト 3'),
+    ...mkRow('PPTX解析の並列数 (1〜16)', mkInput(String(draft.visionConcurrency), v => { draft.visionConcurrency = Math.min(16, Math.max(1, Number(v) || 3)); }), 'PPTX のスライド解析 (Vision/テキスト) を同時に何枚処理するか。大きいほど速いが API 負荷増。デフォルト 3'),
   );
   pane.appendChild(grid);
 
