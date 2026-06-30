@@ -1612,7 +1612,7 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
   // デフォルト: 全 kind が対象。ユーザが × で外すと該当 kind を除外、+ で再追加。
   let activeKinds: SearchKind[] = getSelectedKinds();
   const sourceRow = el('div', { class: 'tdr-source-row', 'aria-label': '検索対象のソース' });
-  const subKey = { mail: 'mail', onenote: 'onenote', pptx: 'folders', transcript: 'folders', doc: 'folders' } as const;
+  const FOLDER_KINDS: SearchKind[] = ['doc', 'pptx', 'transcript'];
   const renderSourceRow = (): void => {
     sourceRow.replaceChildren();
     sourceRow.appendChild(el('span', { class: 'tdr-source-label' }, ['検索対象:']));
@@ -1620,23 +1620,23 @@ export function createChatPanel(root: HTMLElement, siteUrl: string): HTMLElement
       sourceRow.appendChild(el('span', { class: 'tdr-source-empty' }, ['(なし — 「＋」で選択)']));
     } else {
       const sel = loadSubSel(siteUrl);
-      for (const k of activeKinds) {
-        const iconKey = SEARCH_KIND_ICON[k];
-        const subCount = sel[subKey[k]].length;
-        const lbl = subCount > 0 ? `${SEARCH_KIND_LABELS[k]} (${subCount})` : SEARCH_KIND_LABELS[k];
-        const chip = el('span', { class: `tdr-source-chip tdr-source-chip--${k}`, title: subCount > 0 ? '一部のみ対象 (「＋」で変更)' : '全件対象' }, [
-          el('span', { class: 'ic', html: icons[iconKey](12) }),
+      // 文書/PPTX/会議 は「フォルダ」1グループにまとめて1チップで表示。
+      type ChipDesc = { key: string; label: string; icon: keyof typeof icons; count: number; remove: () => void };
+      const chips: ChipDesc[] = [];
+      if (activeKinds.includes('mail')) chips.push({ key: 'mail', label: SEARCH_KIND_LABELS.mail, icon: SEARCH_KIND_ICON.mail, count: sel.mail.length, remove: () => { activeKinds = activeKinds.filter(x => x !== 'mail'); } });
+      if (activeKinds.includes('onenote')) chips.push({ key: 'onenote', label: SEARCH_KIND_LABELS.onenote, icon: SEARCH_KIND_ICON.onenote, count: sel.onenote.length, remove: () => { activeKinds = activeKinds.filter(x => x !== 'onenote'); } });
+      if (FOLDER_KINDS.some(k => activeKinds.includes(k))) chips.push({ key: 'folders', label: 'フォルダ', icon: 'folder', count: sel.folders.length, remove: () => { activeKinds = activeKinds.filter(x => !FOLDER_KINDS.includes(x)); } });
+      for (const c of chips) {
+        const lbl = c.count > 0 ? `${c.label} (${c.count})` : c.label;
+        const chip = el('span', { class: `tdr-source-chip tdr-source-chip--${c.key}`, title: c.count > 0 ? '一部のみ対象 (「＋」で変更)' : '全件対象' }, [
+          el('span', { class: 'ic', html: icons[c.icon](12) }),
           el('span', { class: 'lbl' }, [lbl]),
         ]);
         const rm = el('button', {
-          class: 'tdr-source-x', 'aria-label': `${SEARCH_KIND_LABELS[k]} を検索対象から外す`,
+          class: 'tdr-source-x', 'aria-label': `${c.label} を検索対象から外す`,
           title: '検索対象から外す', html: icons.close(10),
         });
-        rm.addEventListener('click', () => {
-          activeKinds = activeKinds.filter(x => x !== k);
-          setSelectedKinds(activeKinds);
-          renderSourceRow();
-        });
+        rm.addEventListener('click', () => { c.remove(); setSelectedKinds(activeKinds); renderSourceRow(); });
         chip.appendChild(rm);
         sourceRow.appendChild(chip);
       }
