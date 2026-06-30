@@ -1747,6 +1747,78 @@ function Invoke-RelayRequest {
 
 [Console]::TreatControlCAsInput = $false
 
+# AI proxy (/openai 等、$Target へ転送する非 /tadori パス) は純粋な HTTP 転送で
+# 互いに独立なので、runspace プールで並行処理する。これでブラウザが投げた
+# Vision/埋め込みの並列リクエストが relay で直列化されず、実際に並列実行される。
+# ※ /tadori/* (Outlook/OneNote/PowerPoint COM・PDF・ファイル) は STA / 単一インスタンス
+#    依存なので従来どおりメインスレッドで逐次処理する (並列化しない)。
+$ProxyConcurrency = [int]($env:TADORI_PROXY_CONCURRENCY)
+if ($ProxyConcurrency -lt 1) { $ProxyConcurrency = 8 }
+$proxyPool = [runspacefactory]::CreateRunspacePool(1, $ProxyConcurrency)
+$proxyPool.Open()
+$proxyRunning = New-Object System.Collections.ArrayList
+
+# 自己完結 worker (relay の関数に依存しない。$client は HttpClient = スレッドセーフで共有可)。
+$ProxyWorker = {
+    param($ctx, $client, $Target, $targetPath)
+    $request = $ctx.Request; $response = $ctx.Response
+    $method = $request.HttpMethod.ToUpper()
+    function AddCors($r) {
+        $r.Headers.Add('Access-Control-Allow-Origin', '*')
+        $r.Headers.Add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        $r.Headers.Add('Access-Control-Allow-Headers', 'Content-Type, api-key, Accept, Authorization, X-Requested-With, x-api-key, X-Tadori-Filename')
+        $r.Headers.Add('Access-Control-Allow-Private-Network', 'true')
+        $r.Headers.Add('Access-Control-Max-Age', '86400')
+    }
+    try {
+        if ($method -eq 'OPTIONS') { $response.StatusCode = 204; AddCors $response; $response.OutputStream.Close(); return }
+        $rel = $request.Url.PathAndQuery
+        if ($targetPath -and $rel.StartsWith($targetPath)) { $rel = $rel.Substring($targetPath.Length); if (-not $rel) { $rel = '/' } }
+        $upstreamUrl = $Target + $rel
+        $msg = New-Object System.Net.Http.HttpRequestMessage((New-Object System.Net.Http.HttpMethod($method)), $upstreamUrl)
+        if ($request.HasEntityBody) {
+            $ms = New-Object System.IO.MemoryStream
+            $request.InputStream.CopyTo($ms); $bodyBytes = $ms.ToArray(); $ms.Dispose()
+            $content = New-Object System.Net.Http.ByteArrayContent($bodyBytes, 0, $bodyBytes.Length)
+            if ($request.ContentType) { try { $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($request.ContentType) } catch { } }
+            $msg.Content = $content
+        }
+        $forwardKeys = @('api-key', 'x-api-key', 'accept', 'authorization')
+        foreach ($name in $request.Headers.AllKeys) {
+            if ($forwardKeys -contains $name.ToLower()) { $msg.Headers.TryAddWithoutValidation($name, $request.Headers[$name]) | Out-Null }
+        }
+        try {
+            $upstream = $client.SendAsync($msg, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            $response.StatusCode = [int]$upstream.StatusCode
+            AddCors $response
+            $ct = $null
+            if ($upstream.Content -and $upstream.Content.Headers.ContentType) { $ct = $upstream.Content.Headers.ContentType.ToString() }
+            if ($ct) { $response.ContentType = $ct }
+            if ($upstream.Headers.CacheControl) { $response.Headers.Add('Cache-Control', $upstream.Headers.CacheControl.ToString()) }
+            if ($ct -and ($ct -like 'text/event-stream*')) { $response.SendChunked = $true }
+            elseif ($upstream.Content.Headers.ContentLength) { $response.ContentLength64 = $upstream.Content.Headers.ContentLength }
+            else { $response.SendChunked = $true }
+            $stream = $upstream.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $buffer = New-Object byte[] 1024
+            while ($true) {
+                $n = $stream.Read($buffer, 0, $buffer.Length)
+                if ($n -le 0) { break }
+                try { $response.OutputStream.Write($buffer, 0, $n); $response.OutputStream.Flush() } catch { break }
+            }
+            $stream.Dispose(); $upstream.Dispose()
+        }
+        catch {
+            try {
+                $response.StatusCode = 502; AddCors $response
+                $j = '{"ok":false,"error":{"code":"upstream_error","detail":"' + ($_.Exception.Message -replace '\\', '\\' -replace '"', '\"') + '"}}'
+                $b = [System.Text.Encoding]::UTF8.GetBytes($j); $response.ContentType = 'application/json'; $response.OutputStream.Write($b, 0, $b.Length)
+            } catch { }
+        }
+        finally { try { $response.OutputStream.Close() } catch { }; try { $msg.Dispose() } catch { } }
+    }
+    catch { try { $response.StatusCode = 500; $response.OutputStream.Close() } catch { } }
+}
+
 try {
     while ($listener.IsListening) {
         $ctx = $null
@@ -1757,8 +1829,29 @@ try {
             break
         }
         if ($ctx) {
-            try { Invoke-RelayRequest -Context $ctx }
-            catch { Write-Warning "request handler error: $($_.Exception.Message)" }
+            $p = $ctx.Request.Url.AbsolutePath
+            if ($p -like '/tadori/*') {
+                # ローカル機能 (COM/PDF/ファイル) は逐次処理。
+                try { Invoke-RelayRequest -Context $ctx }
+                catch { Write-Warning "request handler error: $($_.Exception.Message)" }
+            }
+            else {
+                # AI proxy 等 → runspace プールへ並行ディスパッチ。
+                Write-Host ("[{0}] {1} {2} (parallel)" -f (Get-Date).ToString('HH:mm:ss'), $ctx.Request.HttpMethod, $p) -ForegroundColor DarkGray
+                $ps = [powershell]::Create()
+                $ps.RunspacePool = $proxyPool
+                [void]$ps.AddScript($ProxyWorker).AddArgument($ctx).AddArgument($client).AddArgument($Target).AddArgument($targetPath)
+                $async = $ps.BeginInvoke()
+                [void]$proxyRunning.Add([pscustomobject]@{ ps = $ps; async = $async })
+            }
+            # 完了した worker を回収 (リーク防止)。
+            for ($i = $proxyRunning.Count - 1; $i -ge 0; $i--) {
+                if ($proxyRunning[$i].async.IsCompleted) {
+                    try { $proxyRunning[$i].ps.EndInvoke($proxyRunning[$i].async) } catch { }
+                    try { $proxyRunning[$i].ps.Dispose() } catch { }
+                    $proxyRunning.RemoveAt($i)
+                }
+            }
         }
     }
 }
@@ -1767,5 +1860,6 @@ finally {
     Write-Host '[shutdown] stopping listener...' -ForegroundColor DarkGray
     try { $listener.Stop() } catch { }
     try { $listener.Close() } catch { }
+    try { $proxyPool.Close() } catch { }
     try { $client.Dispose() } catch { }
 }
