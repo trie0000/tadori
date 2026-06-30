@@ -134,7 +134,13 @@ if (-not $NoProxy -and -not $Proxy) {
 
 Add-Type -AssemblyName System.Net.Http | Out-Null
 
+# .NET Framework は 1 ホストあたり同時接続を既定 2 に制限する。これを上げないと
+# proxy を runspace で並行化しても Azure への接続が 2 本に絞られ直列化してしまう。
+# ブラウザ側の並列数 (visionConcurrency 等) が常に効くよう、十分大きくしておく。
+[System.Net.ServicePointManager]::DefaultConnectionLimit = 256
+
 $handler = New-Object System.Net.Http.HttpClientHandler
+try { $handler.MaxConnectionsPerServer = 256 } catch { }  # .NET Core 系で有効
 $handler.AllowAutoRedirect = $true
 $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::None  # SSE のため未解凍で流す
 
@@ -1752,8 +1758,10 @@ function Invoke-RelayRequest {
 # Vision/埋め込みの並列リクエストが relay で直列化されず、実際に並列実行される。
 # ※ /tadori/* (Outlook/OneNote/PowerPoint COM・PDF・ファイル) は STA / 単一インスタンス
 #    依存なので従来どおりメインスレッドで逐次処理する (並列化しない)。
+# 既定は大きめ (64)。実効並列はブラウザ側の設定 (visionConcurrency/embedConcurrency,
+# 上限16) で決まり、relay 側はそれを頭打ちにしない。意図的に絞りたい時だけ env で下げる。
 $ProxyConcurrency = [int]($env:TADORI_PROXY_CONCURRENCY)
-if ($ProxyConcurrency -lt 1) { $ProxyConcurrency = 8 }
+if ($ProxyConcurrency -lt 1) { $ProxyConcurrency = 64 }
 $proxyPool = [runspacefactory]::CreateRunspacePool(1, $ProxyConcurrency)
 $proxyPool.Open()
 $proxyRunning = New-Object System.Collections.ArrayList
