@@ -22,7 +22,7 @@ import { embedQueryFor } from '../embeddings/router';
 import { seedTestData, SAMPLE_MAILS } from '../dev/seed';
 import { fetchOutlookMails, toIngestMails } from '../outlook/import';
 import { fetchOneNoteHierarchy, fetchOneNotePages, pagesToIngestMails, type OneNoteNotebook } from '../onenote/import';
-import { recordOneNoteBatch, removeOneNoteBatch, listOneNoteBatches } from '../sync/onenoteSources';
+import { recordOneNoteBatch, removeOneNoteBatch, listOneNoteBatches, setOneNoteBatchPageIds, type OneNoteBatch } from '../sync/onenoteSources';
 import { getExcludedOneNotePageIds, setExcludedOneNotePageIds } from '../onenote/exclude';
 import { ingestToSegments } from '../db/writer';
 import {
@@ -593,6 +593,21 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
     return ids;
   }
 
+  /** 全ページがチェックされているノート/セクションを「コンテナ選択」として抽出。
+   *  これをバッチに記録すれば、再同期でそのノート/セクション配下の新規ページも拾える。 */
+  function selectedContainers(checked: Set<string>): { notebookIds: string[]; sectionIds: string[] } {
+    const notebookIds: string[] = [], sectionIds: string[] = [];
+    for (const nb of notebooks) {
+      const allPages = nb.sections.flatMap(s => s.pages.map(p => p.id));
+      if (allPages.length && allPages.every(id => checked.has(id))) { notebookIds.push(nb.id); continue; }
+      for (const sec of nb.sections) {
+        const sp = sec.pages.map(p => p.id);
+        if (sp.length && sp.every(id => checked.has(id))) sectionIds.push(sec.id);
+      }
+    }
+    return { notebookIds, sectionIds };
+  }
+
   function renderTree(): void {
     treeEl.replaceChildren();
     if (notebooks.length === 0) { treeEl.appendChild(el('div', { class: 'tdr-hint' }, ['ノートブックが見つかりませんでした。'])); return; }
@@ -656,14 +671,54 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
         renderBatches();
         toast(root, `ラベル「${b.label}」を削除 (ベクトルは残ります)`, 'ok');
       });
+      const cont = b.notebookIds.length + b.sectionIds.length;
+      const resyncBtn = el('button', {
+        class: 'tdr-btn tdr-btn--sm', title: '選択ノート/セクション配下の新規ページを取り込み、対象を最新化',
+      }, ['再同期']);
+      if (cont === 0) (resyncBtn as HTMLButtonElement).disabled = true; // コンテナ未指定 (個別ページのみ) は再同期対象なし
+      resyncBtn.addEventListener('click', () => { void resyncBatch(b, resyncBtn); });
       batchesEl.appendChild(el('div', {
         style: 'display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) 0;border-bottom:1px solid var(--line)',
       }, [
         el('span', { class: 'tdr-pill', style: 'background:var(--accent-soft);color:var(--accent-strong);padding:1px 8px;border-radius:var(--r-1)' }, [b.label]),
-        el('span', { class: 'tdr-hint', style: 'flex:1' }, [`${b.pageIds.length} ページ`]),
-        del,
+        el('span', { class: 'tdr-hint', style: 'flex:1' }, [`ノート${b.notebookIds.length} / セクション${b.sectionIds.length} / ${b.pageIds.length}ページ`]),
+        resyncBtn, del,
       ]));
     }
+  }
+
+  /** バッチの選択ノート/セクション配下の現行ページを取り直し、新規ページを取り込んで対象を最新化。 */
+  async function resyncBatch(b: OneNoteBatch, btn: HTMLElement): Promise<void> {
+    (btn as HTMLButtonElement).disabled = true; status.textContent = `「${b.label}」を再同期中…`;
+    try {
+      const [hier, eng] = await Promise.all([fetchOneNoteHierarchy(draft.relayBaseUrl), getEngine(siteUrl)]);
+      const nbSet = new Set(b.notebookIds), secSet = new Set(b.sectionIds);
+      // コンテナ配下の現行ページ ID を解決。
+      const target = new Set<string>(b.pageIds); // 既存個別ページは維持
+      for (const nb of hier) {
+        const nbAll = nbSet.has(nb.id);
+        for (const sec of nb.sections) {
+          if (nbAll || secSet.has(sec.id)) for (const pg of sec.pages) target.add(pg.id);
+        }
+      }
+      const already = eng.db.importedOneNotePageIds();
+      const toIngest = [...target].filter(id => !already.has(id));
+      let added = 0;
+      if (toIngest.length > 0) {
+        const pages = await fetchOneNotePages(draft.relayBaseUrl, { ids: toIngest, max: 2000, batchSize: 20 });
+        if (pages.length > 0) {
+          const r = await ingestToSegments(pagesToIngestMails(pages, b.label), draft, siteUrl, () => { /* silent */ });
+          added = r.added;
+        }
+      }
+      setOneNoteBatchPageIds(siteUrl, b.label, [...target]);
+      renderBatches();
+      status.textContent = `「${b.label}」再同期完了: 対象 ${target.size} ページ / 新規取り込み ${added} チャンク`;
+      toast(root, `「${b.label}」再同期: 新規 ${added} チャンク`, 'ok');
+    } catch (e) {
+      status.textContent = '再同期失敗';
+      toast(root, `再同期失敗: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally { (btn as HTMLButtonElement).disabled = false; }
   }
 
   loadBtn.addEventListener('click', () => {
@@ -708,9 +763,10 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
       // 取り込み/除外の変更は無いが、ラベルが指定されていれば「選択ページをそのラベルに束ねる」
       // だけは実行する (既存取り込み済みページへのラベル付けはこの経路)。
       if (label && checkedAll.length) {
-        recordOneNoteBatch(siteUrl, label, checkedAll);
+        const cont = selectedContainers(checked);
+        recordOneNoteBatch(siteUrl, label, { pageIds: checkedAll, ...cont });
         renderBatches();
-        toast(root, `ラベル「${label}」に ${checkedAll.length} ページを登録`, 'ok');
+        toast(root, `ラベル「${label}」に登録 (ノート${cont.notebookIds.length}/セクション${cont.sectionIds.length}/ページ${checkedAll.length})`, 'ok');
       } else {
         toast(root, '変更なし', 'warn');
       }
@@ -731,10 +787,13 @@ function buildOneNoteImport(pane: HTMLElement, draft: RuntimeSettings, root: HTM
   stopBtn.addEventListener('click', () => { ac?.abort(); stopBtn.textContent = '停止中…'; });
 
   async function doApply(newImports: string[], newlyExcluded: string[], reincluded: string[], label = '', checkedAll: string[] = []): Promise<void> {
-    // ラベル指定があれば、選択ページ全体 (既存取り込み済み含む) をそのラベルに束ねる。
-    // 検索は conversationId(=pageId) で照合するので、ここで pageIds を記録すれば
-    // 既存ページも再取り込み不要でラベル絞り込みできる。
-    if (label && checkedAll.length) { recordOneNoteBatch(siteUrl, label, checkedAll); }
+    // ラベル指定があれば、選択ページ全体 (既存取り込み済み含む) + 全選択ノート/セクションを
+    // そのラベルに束ねる。検索は conversationId(=pageId) で照合するので、既存ページも
+    // 再取り込み不要でラベル絞り込みできる。ノート/セクションは再同期で新規ページを拾う用。
+    if (label && checkedAll.length) {
+      const cont = selectedContainers(new Set(checkedAll));
+      recordOneNoteBatch(siteUrl, label, { pageIds: checkedAll, ...cont });
+    }
     ac = new AbortController();
     const signal = ac.signal;
     runBtn.disabled = true;

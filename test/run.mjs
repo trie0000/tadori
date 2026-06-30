@@ -40,7 +40,9 @@ const aliasPlugin = {
   },
 };
 
-const banner = `globalThis.localStorage ??= (()=>{const m=new Map();return {getItem:k=>m.has(k)?m.get(k):null,setItem:(k,v)=>m.set(k,String(v)),removeItem:k=>m.delete(k),clear:()=>m.clear(),key:i=>[...m.keys()][i]??null,get length(){return m.size}};})();`;
+// Node 25 のネイティブ localStorage (要 --localstorage-file, 実質非機能) を確実に
+// メモリ実装で上書きする (??= だと素通りしてしまうため defineProperty で強制)。
+const banner = `(()=>{const m=new Map();const ls={getItem:k=>m.has(String(k))?m.get(String(k)):null,setItem:(k,v)=>m.set(String(k),String(v)),removeItem:k=>m.delete(String(k)),clear:()=>m.clear(),key:i=>[...m.keys()][i]??null,get length(){return m.size}};try{Object.defineProperty(globalThis,'localStorage',{value:ls,writable:true,configurable:true});}catch(e){globalThis.localStorage=ls;}})();`;
 
 const tests = fs.readdirSync(path.join(root, 'test')).filter(f => f.endsWith('.test.ts'));
 if (tests.length === 0) { console.error('test/*.test.ts が見つかりません'); process.exit(1); }
